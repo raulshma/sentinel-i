@@ -1,7 +1,6 @@
 import { generateText, Output, stepCountIs } from 'ai'
 
-import { aiModel } from '../config/ai.js'
-import { env } from '../config/env.js'
+import { aiModel, isAiEnabled } from '../config/ai.js'
 import { logger } from '../config/logger.js'
 import { fetchCrawl4aiTool, fetchStandardHtmlTool } from './tools.js'
 import { newsExtractionSchema, type AgentDecisionAudit, type AgentProcessResult } from '../types/ai.js'
@@ -42,7 +41,7 @@ Your task is to analyze news article content and extract structured data with a 
 
 export class AgentService {
   private isEnabled(): boolean {
-    return !!env.OPENROUTER_API_KEY
+    return isAiEnabled()
   }
 
   async processArticle(

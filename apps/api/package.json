@@ -28,7 +28,7 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^2.0.41",
+    "@openrouter/ai-sdk-provider": "^2.5.1",
     "ai": "^6.0.159",
     "bullmq": "^5.73.5",
     "cors": "^2.8.6",
