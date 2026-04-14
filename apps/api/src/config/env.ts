@@ -33,6 +33,10 @@ const envSchema = z.object({
   RSS_SYNC_CRON: z.string().default('*/15 * * * *'),
   HTTP_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   CRAWL4AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  LIVE_UPDATES_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 })
 
 const parsedEnv = envSchema.parse(process.env)
@@ -41,6 +45,8 @@ const crawl4aiApiUrl = parsedEnv.CRAWL4AI_API_URL ?? parsedEnv.CREW4AI_API_URL
 const crawl4aiApiKey = parsedEnv.CRAWL4AI_API_KEY ?? parsedEnv.CREW4AI_API_KEY
 const crawl4aiTimeoutMs =
   parsedEnv.CRAWL4AI_TIMEOUT_MS ?? parsedEnv.CREW4AI_TIMEOUT_MS ?? 15_000
+
+export const isLiveUpdatesEnabled = parsedEnv.LIVE_UPDATES_ENABLED
 
 export const env = {
   ...parsedEnv,

@@ -1,6 +1,7 @@
 import { generateText, Output, stepCountIs } from "ai";
 
 import { aiModel, isAiEnabled } from "../config/ai.js";
+import { isLiveUpdatesEnabled } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { fetchCrawl4aiTool, fetchStandardHtmlTool } from "./tools.js";
 import {
@@ -8,6 +9,7 @@ import {
   type AgentDecisionAudit,
   type AgentProcessResult,
 } from "../types/ai.js";
+import { processingEventBus } from "../services/processingEventBus.js";
 
 const SYSTEM_PROMPT = `You are a geo-spatial news extraction agent for Indian news articles.
 
@@ -62,6 +64,16 @@ export class AgentService {
 
     const startedAt = Date.now();
 
+    if (isLiveUpdatesEnabled) {
+      processingEventBus.emitLog({
+        sourceUrl,
+        headline,
+        stage: 'ai_processing',
+        message: `Sending article to AI model for extraction...`,
+        status: 'start',
+      })
+    }
+
     const audit: AgentDecisionAudit = {
       decisionPath: "Agent_Invoked",
       toolsInvoked: [],
@@ -104,6 +116,17 @@ export class AgentService {
         if (step.toolCalls && step.toolCalls.length > 0) {
           for (const toolCall of step.toolCalls) {
             audit.toolsInvoked.push(toolCall.toolName);
+
+            if (isLiveUpdatesEnabled) {
+              processingEventBus.emitLog({
+                sourceUrl,
+                headline,
+                stage: 'ai_tool_call',
+                message: `AI agent invoked tool: ${toolCall.toolName}`,
+                status: 'info',
+                metadata: { toolName: toolCall.toolName },
+              })
+            }
 
             const matchedResult = step.toolResults.find(
               (r: { toolCallId: string }) =>

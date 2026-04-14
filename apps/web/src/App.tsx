@@ -1,8 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 
 import { FilterPanel } from './components/FilterPanel'
+import { TerminalPanel } from './components/TerminalPanel'
 import { useDeepLink } from './hooks/useDeepLink'
 import { useMapData } from './hooks/useMapData'
+import { useProcessingLogs } from './hooks/useProcessingLogs'
 import { useRealtimeStats } from './hooks/useRealtimeStats'
 import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from './types/map'
 
@@ -30,6 +32,7 @@ const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
 function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats()
   const { initialState, pushState } = useDeepLink()
+  const { logs, isEnabled: isLiveUpdatesEnabled, isConnected: isTerminalConnected } = useProcessingLogs()
 
   const [selectedCategories, setSelectedCategories] = useState<NewsCategory[]>(
     initialState.categories,
@@ -38,6 +41,7 @@ function App() {
   const [showFilters, setShowFilters] = useState(false)
   const [selectedFeature, setSelectedFeature] = useState<MapFeature | null>(null)
   const [showNational, setShowNational] = useState(false)
+  const [showTerminal, setShowTerminal] = useState(false)
 
   const { features, nationalItems, isLoading, debouncedFetchViewport } = useMapData(
     hours,
@@ -183,7 +187,7 @@ function App() {
         </Suspense>
       </div>
 
-      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5" role="contentinfo" aria-label="Category legend">
+      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5" role="contentinfo" aria-label="Category legend and controls">
         <ul className="flex flex-wrap items-center gap-x-4 gap-y-1" aria-label="News categories">
           {CATEGORY_ENTRIES.map(({ label, color }) => {
             const isActive =
@@ -206,6 +210,15 @@ function App() {
           })}
           <li className="ml-auto text-[10px] text-slate-500" aria-live="polite">
             {features.length} markers · {nationalItems.length} national
+          </li>
+          <li className="relative">
+            <TerminalPanel
+              logs={logs}
+              isEnabled={isLiveUpdatesEnabled}
+              isConnected={isTerminalConnected}
+              isOpen={showTerminal}
+              onToggle={() => setShowTerminal((prev) => !prev)}
+            />
           </li>
         </ul>
       </footer>

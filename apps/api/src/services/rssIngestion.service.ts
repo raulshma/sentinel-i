@@ -1,6 +1,7 @@
 import Parser from 'rss-parser'
 
 import { agentService } from '../agent/agentService.js'
+import { isLiveUpdatesEnabled } from '../config/env.js'
 import { cacheService } from './cache.service.js'
 import { rssFeedSources } from '../config/rssFeeds.js'
 import { logger } from '../config/logger.js'
@@ -12,6 +13,7 @@ import { socketGateway } from '../socket/socketGateway.js'
 import type { NewsCategory } from '../types/news.js'
 import { contentFetchService, type FetchArticleContentOutput } from './contentFetch.service.js'
 import { geocodeService } from './geocode.service.js'
+import { processingEventBus } from './processingEventBus.js'
 
 type RssItem = {
   title?: string
@@ -282,6 +284,18 @@ const resolvePublishedAt = (item: RssItem): string => {
 export class RssIngestionService {
   constructor(private readonly repository: NewsRepository = newsRepository) {}
 
+  private log(
+    sourceUrl: string,
+    headline: string | null,
+    stage: Parameters<typeof processingEventBus.emitLog>[0]['stage'],
+    message: string,
+    status: Parameters<typeof processingEventBus.emitLog>[0]['status'],
+    metadata?: Record<string, unknown>,
+  ): void {
+    if (!isLiveUpdatesEnabled) return
+    processingEventBus.emitLog({ sourceUrl, headline, stage, message, status, metadata })
+  }
+
   async runIngestionCycle(): Promise<RssIngestionSummary> {
     const startedAt = new Date()
 
@@ -304,8 +318,12 @@ export class RssIngestionService {
     for (const feedUrl of rssFeedSources) {
       const feedStartedAt = new Date()
 
+      this.log(feedUrl, null, 'feed_fetch', `Fetching RSS feed: ${feedUrl}`, 'start')
+
       try {
         const parsedFeed = (await parser.parseURL(feedUrl)) as RssFeed
+
+        this.log(feedUrl, null, 'feed_parse', `Parsed ${parsedFeed.items.length} entries from feed`, 'success', { itemCount: parsedFeed.items.length })
 
         for (const item of parsedFeed.items) {
           summary.entriesSeen += 1
@@ -320,6 +338,8 @@ export class RssIngestionService {
         }
       } catch (error) {
         summary.errorCount += 1
+
+        this.log(feedUrl, null, 'feed_fetch', `Feed parse failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
 
         logger.error(
           { error, feedUrl },
@@ -359,6 +379,8 @@ export class RssIngestionService {
     if (await cacheService.isDuplicate(sourceUrl)) {
       summary.duplicateCount += 1
 
+      this.log(sourceUrl, headline, 'deduplication', 'Skipped: URL already in cache', 'warn')
+
       await this.repository.recordIngestionRun({
         feedUrl,
         decisionPath: 'Dedupe_Valkey_Cache',
@@ -375,6 +397,8 @@ export class RssIngestionService {
     if (this.isLikelyDuplicate(fingerprint, dedupeFingerprints)) {
       summary.duplicateCount += 1
 
+      this.log(sourceUrl, headline, 'deduplication', 'Skipped: similar headline exists', 'warn')
+
       await this.repository.recordIngestionRun({
         feedUrl,
         decisionPath: 'Dedupe_Title_Match',
@@ -389,9 +413,15 @@ export class RssIngestionService {
     const rawSummary = normalizeText(item.contentSnippet ?? item.content ?? headline)
 
     try {
+      this.log(sourceUrl, headline, 'ai_processing', 'Starting article processing pipeline', 'start')
+
       const agentResult = await agentService.processArticle(headline, rawSummary, sourceUrl)
 
       if (agentResult) {
+        this.log(sourceUrl, headline, 'ai_processing', `AI agent extracted: category=${agentResult.extraction.category}, city=${agentResult.extraction.city ?? 'N/A'}, state=${agentResult.extraction.state ?? 'N/A'}`, 'success', {
+          decisionPath: agentResult.audit.decisionPath,
+          latencyMs: agentResult.audit.totalLatencyMs,
+        })
         await this.processWithAgentExtraction(
           agentResult.extraction,
           agentResult.audit.decisionPath,
@@ -407,6 +437,8 @@ export class RssIngestionService {
         return
       }
 
+      this.log(sourceUrl, headline, 'ai_processing', 'AI agent not available, falling back to rule-based extraction', 'info')
+
       await this.processWithRuleBasedExtraction(
         headline,
         rawSummary,
@@ -420,6 +452,8 @@ export class RssIngestionService {
       )
     } catch (error) {
       summary.errorCount += 1
+
+      this.log(sourceUrl, headline, 'error', `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
 
       logger.error(
         { error, feedUrl, sourceUrl },
@@ -456,6 +490,7 @@ export class RssIngestionService {
     let longitude: number | null = null
 
     if (!isNational && (extraction.location_name || extraction.city || extraction.state)) {
+      this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding: ${extraction.location_name ?? extraction.city ?? extraction.state}`, 'start')
       const coordinates = await geocodeService.forwardGeocode({
         locationName: extraction.location_name ?? extraction.city ?? extraction.state ?? '',
         city: extraction.city,
@@ -465,6 +500,9 @@ export class RssIngestionService {
       if (coordinates) {
         latitude = coordinates.latitude
         longitude = coordinates.longitude
+        this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
+      } else {
+        this.log(sourceUrl, extraction.headline, 'geocoding', 'Geocoding returned no coordinates', 'warn')
       }
     }
 
@@ -473,6 +511,8 @@ export class RssIngestionService {
       : extraction.category === 'Uncategorized / National'
         ? 'General'
         : extraction.category
+
+    this.log(sourceUrl, extraction.headline, 'storage', 'Storing news item in database', 'start')
 
     const createdNewsItem = await this.repository.createNewsItem({
       sourceUrl,
@@ -491,6 +531,8 @@ export class RssIngestionService {
     if (!createdNewsItem) {
       summary.duplicateCount += 1
 
+      this.log(sourceUrl, extraction.headline, 'storage', 'Skipped: insert conflict', 'warn')
+
       await this.repository.recordIngestionRun({
         feedUrl,
         decisionPath: `${agentDecisionPath} -> Insert_Conflict_or_Error`,
@@ -501,6 +543,8 @@ export class RssIngestionService {
 
       return
     }
+
+    this.log(sourceUrl, extraction.headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : ` - ${extraction.city ?? extraction.state ?? ''}`}`, 'success')
 
     summary.inserted += 1
 
@@ -538,7 +582,11 @@ export class RssIngestionService {
       strategyUsed: 'rss',
     }
 
+    this.log(sourceUrl, headline, 'content_fetch', `Fetching article content (RSS summary: ${rawSummary.length} chars)`, 'start')
+
     fetchResult = await contentFetchService.fetchBestContent(sourceUrl, rawSummary)
+
+    this.log(sourceUrl, headline, 'content_parse', `Content fetched via ${fetchResult.strategyUsed} (${fetchResult.content.length} chars)`, 'success', { strategy: fetchResult.strategyUsed })
 
     const fullText = normalizeText(`${headline} ${fetchResult.content}`)
     const baseCategory = categorizeArticle(fullText)
@@ -550,6 +598,7 @@ export class RssIngestionService {
     let category: NewsCategory = baseCategory
 
     if (location.locationName) {
+      this.log(sourceUrl, headline, 'geocoding', `Geocoding: ${location.locationName}`, 'start')
       const coordinates = await geocodeService.forwardGeocode({
         locationName: location.locationName,
         city: location.city,
@@ -559,6 +608,7 @@ export class RssIngestionService {
       if (coordinates) {
         latitude = coordinates.latitude
         longitude = coordinates.longitude
+        this.log(sourceUrl, headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
       } else {
         isNational = true
       }
@@ -569,6 +619,8 @@ export class RssIngestionService {
     if (isNational) {
       category = 'Uncategorized / National'
     }
+
+    this.log(sourceUrl, headline, 'storage', 'Storing news item in database', 'start')
 
     const createdNewsItem = await this.repository.createNewsItem({
       sourceUrl,
@@ -587,6 +639,8 @@ export class RssIngestionService {
     if (!createdNewsItem) {
       summary.duplicateCount += 1
 
+      this.log(sourceUrl, headline, 'storage', 'Skipped: insert conflict', 'warn')
+
       await this.repository.recordIngestionRun({
         feedUrl,
         decisionPath: `${fetchResult.decisionPath} -> Insert_Conflict_or_Error`,
@@ -603,6 +657,8 @@ export class RssIngestionService {
     if (createdNewsItem.isNational) {
       summary.nationalCount += 1
     }
+
+    this.log(sourceUrl, headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : ` - ${location.locationName ?? ''}`}`, 'success')
 
     dedupeFingerprints.push(fingerprint)
     await cacheService.markProcessed(sourceUrl)

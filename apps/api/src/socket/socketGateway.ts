@@ -4,7 +4,9 @@ import type { Server as HttpServer } from 'node:http'
 import { Server } from 'socket.io'
 
 import { env } from '../config/env.js'
+import { isLiveUpdatesEnabled } from '../config/env.js'
 import { logger } from '../config/logger.js'
+import { processingEventBus, type ProcessingLogEntry } from '../services/processingEventBus.js'
 import type { NewsItem } from '../types/news.js'
 
 class SocketGateway extends EventEmitter {
@@ -42,6 +44,12 @@ class SocketGateway extends EventEmitter {
         )
       })
     })
+
+    if (isLiveUpdatesEnabled) {
+      processingEventBus.on('log', (entry: ProcessingLogEntry) => {
+        this.publishProcessingLog(entry)
+      })
+    }
   }
 
   getConnectedUsers(): number {
@@ -52,7 +60,16 @@ class SocketGateway extends EventEmitter {
     this.io?.emit('news:created', item)
   }
 
+  publishProcessingLog(entry: ProcessingLogEntry): void {
+    this.io?.emit('processing:log', entry)
+  }
+
+  isLiveUpdatesEnabled(): boolean {
+    return isLiveUpdatesEnabled
+  }
+
   shutdown(): void {
+    processingEventBus.removeAllListeners('log')
     this.io?.removeAllListeners()
     void this.io?.close()
     this.io = undefined
