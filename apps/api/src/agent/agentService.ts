@@ -1,9 +1,13 @@
-import { generateText, Output, stepCountIs } from 'ai'
+import { generateText, Output, stepCountIs } from "ai";
 
-import { aiModel, isAiEnabled } from '../config/ai.js'
-import { logger } from '../config/logger.js'
-import { fetchCrawl4aiTool, fetchStandardHtmlTool } from './tools.js'
-import { newsExtractionSchema, type AgentDecisionAudit, type AgentProcessResult } from '../types/ai.js'
+import { aiModel, isAiEnabled } from "../config/ai.js";
+import { logger } from "../config/logger.js";
+import { fetchCrawl4aiTool, fetchStandardHtmlTool } from "./tools.js";
+import {
+  newsExtractionSchema,
+  type AgentDecisionAudit,
+  type AgentProcessResult,
+} from "../types/ai.js";
 
 const SYSTEM_PROMPT = `You are a geo-spatial news extraction agent for Indian news articles.
 
@@ -37,11 +41,11 @@ Your task is to analyze news article content and extract structured data with a 
 ## Important:
 - Only identify locations in India.
 - If the article is about national-level news with no specific city/state, set location_name/city/state to null and use category "Uncategorized / National".
-- Never fabricate or guess locations. If uncertain, mark as null.`
+- Never fabricate or guess locations. If uncertain, mark as null.`;
 
 export class AgentService {
   private isEnabled(): boolean {
-    return isAiEnabled()
+    return isAiEnabled();
   }
 
   async processArticle(
@@ -50,27 +54,29 @@ export class AgentService {
     sourceUrl: string,
   ): Promise<AgentProcessResult | null> {
     if (!this.isEnabled()) {
-      logger.debug('OpenRouter API key not configured; skipping AI agent processing')
-      return null
+      logger.debug(
+        "OpenRouter API key not configured; skipping AI agent processing",
+      );
+      return null;
     }
 
-    const startedAt = Date.now()
+    const startedAt = Date.now();
 
     const audit: AgentDecisionAudit = {
-      decisionPath: 'Agent_Invoked',
+      decisionPath: "Agent_Invoked",
       toolsInvoked: [],
       toolResults: [],
       extractionAttempts: 1,
       totalLatencyMs: 0,
-    }
+    };
 
     const userContent = [
       `## Article URL: ${sourceUrl}`,
       `## Headline: ${headline}`,
       `## Content:\n${content}`,
-      '',
-      'Extract the structured data from this Indian news article. If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.',
-    ].join('\n')
+      "",
+      "Extract the structured data from this Indian news article. If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.",
+    ].join("\n");
 
     try {
       const result = await generateText({
@@ -83,53 +89,54 @@ export class AgentService {
           fetch_standard_html: fetchStandardHtmlTool,
         },
         stopWhen: stepCountIs(4),
-      })
+      });
 
-      audit.totalLatencyMs = Date.now() - startedAt
+      audit.totalLatencyMs = Date.now() - startedAt;
 
-      const usage = result.totalUsage
+      const usage = result.totalUsage;
       audit.tokensUsed = {
         prompt: usage.inputTokens ?? undefined,
         completion: usage.outputTokens ?? undefined,
         total: usage.totalTokens ?? undefined,
-      }
+      };
 
       for (const step of result.steps) {
         if (step.toolCalls && step.toolCalls.length > 0) {
           for (const toolCall of step.toolCalls) {
-            audit.toolsInvoked.push(toolCall.toolName)
+            audit.toolsInvoked.push(toolCall.toolName);
 
             const matchedResult = step.toolResults.find(
-              (r: { toolCallId: string }) => r.toolCallId === toolCall.toolCallId,
-            )
+              (r: { toolCallId: string }) =>
+                r.toolCallId === toolCall.toolCallId,
+            );
 
             const resultData = matchedResult?.output as
               | { success: boolean; error?: string | null }
-              | undefined
+              | undefined;
 
             audit.toolResults.push({
               tool: toolCall.toolName,
               success: resultData?.success ?? false,
               latencyMs: 0,
-            })
+            });
           }
         }
 
         if (step.toolResults && step.toolResults.length > 0) {
-          audit.extractionAttempts += 1
+          audit.extractionAttempts += 1;
         }
       }
 
       if (audit.toolsInvoked.length === 0) {
-        audit.decisionPath = 'Agent_RSS_Sufficient'
+        audit.decisionPath = "Agent_RSS_Sufficient";
       } else {
         const toolSummary = audit.toolResults
-          .map((t) => `${t.tool} -> ${t.success ? 'Success' : 'Failed'}`)
-          .join(' -> ')
-        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`
+          .map((t) => `${t.tool} -> ${t.success ? "Success" : "Failed"}`)
+          .join(" -> ");
+        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`;
       }
 
-      const extraction = result.output
+      const extraction = result.output;
 
       logger.info(
         {
@@ -142,16 +149,16 @@ export class AgentService {
           city: extraction.city,
           state: extraction.state,
         },
-        'AI agent successfully processed article',
-      )
+        "AI agent successfully processed article",
+      );
 
       return {
         extraction,
         audit,
-      }
+      };
     } catch (error) {
-      audit.totalLatencyMs = Date.now() - startedAt
-      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`
+      audit.totalLatencyMs = Date.now() - startedAt;
+      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`;
 
       logger.error(
         {
@@ -160,12 +167,12 @@ export class AgentService {
           decisionPath: audit.decisionPath,
           totalLatencyMs: audit.totalLatencyMs,
         },
-        'AI agent processing failed',
-      )
+        "AI agent processing failed",
+      );
 
-      return null
+      return null;
     }
   }
 }
 
-export const agentService = new AgentService()
+export const agentService = new AgentService();
