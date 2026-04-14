@@ -65,6 +65,40 @@ export interface IngestionRunInput {
   finishedAt?: Date
 }
 
+export interface ClusteredViewportQuery extends ViewportQuery {
+  zoom: number
+}
+
+export interface MapMarker {
+  id: string
+  latitude: number
+  longitude: number
+  category: NewsCategory
+  headline: string
+  isCluster: false
+}
+
+export interface MapCluster {
+  id: string
+  latitude: number
+  longitude: number
+  count: number
+  topCategories: NewsCategory[]
+  isCluster: true
+}
+
+export type MapFeature = MapMarker | MapCluster
+
+export interface ClusteredViewportResponse {
+  features: MapFeature[]
+  nationalItems: NewsItem[]
+  meta: {
+    totalFeatures: number
+    nationalCount: number
+    query: ClusteredViewportQuery
+  }
+}
+
 export const isNewsCategory = (value: string): value is NewsCategory => {
   return NEWS_CATEGORIES.includes(value as NewsCategory)
 }

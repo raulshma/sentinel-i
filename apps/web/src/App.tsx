@@ -1,118 +1,98 @@
-import { useRealtimeStats } from './hooks/useRealtimeStats'
+import { useCallback, useState } from 'react'
 
-const categories = [
-  'Politics',
-  'Business',
-  'Technology',
-  'Sports',
-  'Entertainment',
-  'Crime',
-  'Weather',
-  'General',
-] as const
+import { FeatureDetail } from './components/FeatureDetail'
+import { MapComponent } from './components/MapComponent'
+import { NationalPanel } from './components/NationalPanel'
+import { useMapData } from './hooks/useMapData'
+import { useRealtimeStats } from './hooks/useRealtimeStats'
+import { CATEGORY_COLORS, type MapFeature } from './types/map'
+
+const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
+  { label: 'Politics', color: CATEGORY_COLORS.Politics },
+  { label: 'Business', color: CATEGORY_COLORS.Business },
+  { label: 'Technology', color: CATEGORY_COLORS.Technology },
+  { label: 'Sports', color: CATEGORY_COLORS.Sports },
+  { label: 'Entertainment', color: CATEGORY_COLORS.Entertainment },
+  { label: 'Crime', color: CATEGORY_COLORS.Crime },
+  { label: 'Weather', color: CATEGORY_COLORS.Weather },
+  { label: 'General', color: CATEGORY_COLORS.General },
+]
 
 function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats()
-  const timestamp = new Intl.DateTimeFormat('en-IN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date())
+  const { features, nationalItems, isLoading, debouncedFetchViewport } = useMapData()
+  const [selectedFeature, setSelectedFeature] = useState<MapFeature | null>(null)
+  const [showNational, setShowNational] = useState(false)
+
+  const handleFeatureClick = useCallback((feature: MapFeature) => {
+    setSelectedFeature(feature)
+  }, [])
+
+  const handleCloseDetail = useCallback(() => {
+    setSelectedFeature(null)
+  }, [])
 
   return (
-    <main className="min-h-screen">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
-        <header className="glass-panel p-6">
-          <p className="text-xs uppercase tracking-[0.22em] text-sky-200/80">
-            Geo-Spatial News Aggregator · India
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold text-white sm:text-3xl">
-            Sentinel-i · Phase 1 foundation
+    <main className="flex h-screen flex-col">
+      <header className="glass-panel mx-3 mt-3 flex items-center justify-between rounded-xl px-4 py-3">
+        <div className="flex items-center gap-4">
+          <h1 className="text-base font-semibold text-white">
+            Sentinel-i
           </h1>
-          <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-300">
-            Core infrastructure is live: React + Node.js boilerplates,
-            PostGIS/Redis Docker stack, 15-minute ingestion scheduler skeleton,
-            and realtime presence over WebSockets.
-          </p>
-        </header>
-
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <article className="glass-panel p-5">
-            <p className="text-xs uppercase tracking-wider text-slate-300/80">
-              Active users
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-white">
-              {connectedUsers}
-            </p>
-          </article>
-
-          <article className="glass-panel p-5">
-            <p className="text-xs uppercase tracking-wider text-slate-300/80">
-              Realtime mode
-            </p>
-            <p className="mt-2 text-lg font-semibold text-white">
-              {mode === 'websocket' ? 'WebSocket push' : 'HTTP polling fallback'}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">
-              {isSocketConnected
-                ? 'Socket connected'
-                : 'Socket unavailable, polling every 15 seconds'}
-            </p>
-          </article>
-
-          <article className="glass-panel p-5">
-            <p className="text-xs uppercase tracking-wider text-slate-300/80">
-              Last refresh
-            </p>
-            <p className="mt-2 text-lg font-semibold text-white">{timestamp}</p>
-            <p className="mt-1 text-xs text-slate-400">Locale: en-IN</p>
-          </article>
-        </section>
-
-        <section className="glass-panel relative overflow-hidden p-6">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.18),transparent_35%),radial-gradient(circle_at_80%_70%,rgba(34,197,94,0.12),transparent_35%)]" />
-          <div className="relative">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-white">
-                Map viewport shell (Phase 4 target)
-              </h2>
-              <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-slate-200">
-                mapcn integration pending
-              </span>
-            </div>
-
-            <div className="mt-4 flex h-90 items-center justify-center rounded-xl border border-dashed border-white/20 bg-slate-900/60 text-center">
-              <div>
-                <p className="text-sm font-medium text-slate-200">
-                  Interactive India map placeholder
-                </p>
-                <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-400">
-                  Backend viewport endpoint is ready at
-                  <code className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 text-slate-100">
-                    /api/v1/news/viewport
-                  </code>
-                  and will feed map markers and clustering in the next phase.
-                </p>
-              </div>
-            </div>
+          <span className="hidden text-xs text-slate-400 sm:inline">
+            Geo-Spatial News Aggregator · India
+          </span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5">
+            <div
+              className={`h-2 w-2 rounded-full ${
+                isSocketConnected ? 'bg-emerald-400' : 'bg-amber-400'
+              }`}
+            />
+            <span className="text-[11px] text-slate-400">
+              {connectedUsers} online · {mode === 'websocket' ? 'Live' : 'Polling'}
+            </span>
           </div>
-        </section>
+        </div>
+      </header>
 
-        <section className="glass-panel p-6">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
-            Category legend baseline
-          </h3>
-          <ul className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {categories.map((category) => (
-              <li
-                key={category}
-                className="rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-slate-200"
-              >
-                {category}
-              </li>
-            ))}
-          </ul>
-        </section>
+      <div className="relative flex-1">
+        <MapComponent
+          features={features}
+          isLoading={isLoading}
+          onViewportChange={debouncedFetchViewport}
+          onFeatureClick={handleFeatureClick}
+        />
+
+        <NationalPanel
+          items={nationalItems}
+          isVisible={showNational}
+          onToggle={() => setShowNational((prev) => !prev)}
+        />
+
+        <FeatureDetail
+          feature={selectedFeature}
+          onClose={handleCloseDetail}
+        />
       </div>
+
+      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5">
+        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {CATEGORY_ENTRIES.map(({ label, color }) => (
+            <li key={label} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: color }}
+              />
+              <span className="text-[11px] text-slate-300">{label}</span>
+            </li>
+          ))}
+          <li className="ml-auto text-[10px] text-slate-500">
+            {features.length} markers · {nationalItems.length} national
+          </li>
+        </ul>
+      </footer>
     </main>
   )
 }

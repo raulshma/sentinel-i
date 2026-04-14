@@ -7,6 +7,7 @@ const newsRouter = Router()
 const newsController = new NewsController(newsService)
 
 newsRouter.get('/viewport', newsController.getViewportNews)
+newsRouter.get('/clustered-viewport', newsController.getClusteredViewport)
 newsRouter.get('/stats', newsController.getRealtimeStats)
 
 export { newsRouter }

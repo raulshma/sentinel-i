@@ -1,9 +1,13 @@
 import { getPgPool } from '../config/db.js'
 import { logger } from '../config/logger.js'
 import {
+  type ClusteredViewportQuery,
   type CreateNewsItemInput,
   type IngestionRunInput,
   isNewsCategory,
+  type MapCluster,
+  type MapFeature,
+  type MapMarker,
   type NewsCategory,
   type NewsItem,
   type ViewportQuery,
@@ -114,6 +118,66 @@ const INSERT_INGESTION_RUN_SQL = `
     finished_at
   )
   VALUES ($1, $2, $3, $4, $5, $6);
+`
+
+const CLUSTER_GRID_SQL = `
+  SELECT
+    ST_Y(ST_Centroid(ST_Collect(geom::geometry)))::double precision AS latitude,
+    ST_X(ST_Centroid(ST_Collect(geom::geometry)))::double precision AS longitude,
+    COUNT(*)::int AS count,
+    json_agg(DISTINCT category) AS categories_json
+  FROM news_items
+  WHERE published_at >= NOW() - make_interval(hours => $5::int)
+    AND is_national = FALSE
+    AND geom IS NOT NULL
+    AND geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+  GROUP BY ST_SnapToGrid(geom::geometry, $6::double precision)
+  ORDER BY count DESC
+  LIMIT 500;
+`
+
+const CLUSTER_INDIVIDUAL_SQL = `
+  SELECT
+    id,
+    headline,
+    summary,
+    source_url,
+    location_name,
+    city,
+    state,
+    category,
+    ST_Y(geom::geometry)::double precision AS latitude,
+    ST_X(geom::geometry)::double precision AS longitude,
+    is_national,
+    published_at
+  FROM news_items
+  WHERE published_at >= NOW() - make_interval(hours => $5::int)
+    AND is_national = FALSE
+    AND geom IS NOT NULL
+    AND geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+  ORDER BY published_at DESC
+  LIMIT 500;
+`
+
+const NATIONAL_ITEMS_SQL = `
+  SELECT
+    id,
+    headline,
+    summary,
+    source_url,
+    location_name,
+    city,
+    state,
+    category,
+    NULL::double precision AS latitude,
+    NULL::double precision AS longitude,
+    is_national,
+    published_at
+  FROM news_items
+  WHERE published_at >= NOW() - make_interval(hours => $1::int)
+    AND is_national = TRUE
+  ORDER BY published_at DESC
+  LIMIT 100;
 `
 
 const normalizeCategory = (
@@ -242,6 +306,120 @@ export class NewsRepository {
         'Failed to record ingestion run metadata',
       )
     }
+  }
+
+  private getGridSize(zoom: number): number {
+    if (zoom <= 4) return 3.0
+    if (zoom <= 6) return 1.5
+    if (zoom <= 8) return 0.8
+    if (zoom <= 10) return 0.3
+    return 0.1
+  }
+
+  async findClusteredViewport(query: ClusteredViewportQuery): Promise<{
+    features: MapFeature[]
+    nationalItems: NewsItem[]
+  }> {
+    const { zoom, ...viewport } = query
+    const gridSize = this.getGridSize(zoom)
+    const shouldCluster = zoom < 10
+
+    const features: MapFeature[] = []
+
+    try {
+      if (shouldCluster) {
+        const result = await getPgPool().query<{
+          latitude: number
+          longitude: number
+          count: number
+          categories_json: string[]
+        }>(CLUSTER_GRID_SQL, [
+          viewport.minLng,
+          viewport.minLat,
+          viewport.maxLng,
+          viewport.maxLat,
+          viewport.hours,
+          gridSize,
+        ])
+
+        for (const row of result.rows) {
+          const validCategories = (row.categories_json ?? []).filter(isNewsCategory)
+
+          if (row.count === 1 && validCategories.length === 1) {
+            features.push({
+              id: `marker-${row.latitude.toFixed(4)}-${row.longitude.toFixed(4)}`,
+              latitude: row.latitude,
+              longitude: row.longitude,
+              category: validCategories[0] ?? 'General',
+              headline: '',
+              isCluster: false,
+            } satisfies MapMarker)
+          } else {
+            features.push({
+              id: `cluster-${row.latitude.toFixed(4)}-${row.longitude.toFixed(4)}`,
+              latitude: row.latitude,
+              longitude: row.longitude,
+              count: row.count,
+              topCategories: validCategories.slice(0, 3),
+              isCluster: true,
+            } satisfies MapCluster)
+          }
+        }
+      } else {
+        const result = await getPgPool().query<NewsRow>(CLUSTER_INDIVIDUAL_SQL, [
+          viewport.minLng,
+          viewport.minLat,
+          viewport.maxLng,
+          viewport.maxLat,
+          viewport.hours,
+        ])
+
+        for (const row of result.rows) {
+          features.push({
+            id: row.id,
+            latitude: Number(row.latitude),
+            longitude: Number(row.longitude),
+            category: normalizeCategory(row.category, row.is_national),
+            headline: row.headline,
+            isCluster: false,
+          } satisfies MapMarker)
+        }
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Clustered viewport query failed; returning empty features')
+    }
+
+    if (viewport.categories && viewport.categories.length > 0) {
+      const categorySet = new Set(viewport.categories)
+      const filtered = features.filter((f) => {
+        if (f.isCluster) {
+          return f.topCategories.some((c) => categorySet.has(c))
+        }
+        return categorySet.has(f.category)
+      })
+      features.length = 0
+      features.push(...filtered)
+    }
+
+    let nationalItems: NewsItem[] = []
+
+    try {
+      const nationalResult = await getPgPool().query<NewsRow>(NATIONAL_ITEMS_SQL, [
+        viewport.hours,
+      ])
+
+      nationalItems = nationalResult.rows.map(mapRowToNewsItem)
+
+      if (viewport.categories && viewport.categories.length > 0) {
+        nationalItems = nationalItems.filter((item) =>
+          viewport.categories?.includes(item.category),
+        )
+      }
+    } catch (error) {
+      logger.warn({ error }, 'National items query failed')
+    }
+
+    return { features, nationalItems }
   }
 }
 
