@@ -8,6 +8,6 @@ export const getProcessingLogs = async (_req: Request, res: Response): Promise<v
 
   res.json({
     data: logs,
-    liveUpdatesEnabled: socketGateway.isLiveUpdatesEnabled(),
+    devToolsEnabled: socketGateway.isDevToolsEnabled(),
   })
 }

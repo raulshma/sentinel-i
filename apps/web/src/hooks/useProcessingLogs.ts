@@ -55,22 +55,29 @@ export const useProcessingLogs = () => {
   const [logs, setLogs] = useState<ProcessingLogEntry[]>([])
   const [isEnabled, setIsEnabled] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
+  const [nextSyncAt, setNextSyncAt] = useState<string | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
   const socketRef = useRef<ReturnType<typeof io> | null>(null)
 
-  const fetchHistoricalLogs = useCallback(async () => {
+  const fetchDevToolsStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/v1/processing/logs`)
-      if (!response.ok) return
-
-      const payload = (await response.json()) as {
-        data: ProcessingLogEntry[]
-        liveUpdatesEnabled: boolean
-      }
-
-      setIsEnabled(payload.liveUpdatesEnabled)
-      setLogs(payload.data.slice(-MAX_LOG_ENTRIES))
+      const res = await fetch(`${API_BASE}/api/v1/devtools`)
+      if (!res.ok) return
+      const data = await res.json() as { nextSyncAt: string | null }
+      setNextSyncAt(data.nextSyncAt)
     } catch {
-      // Swallow network errors
+      // swallow
+    }
+  }, [])
+
+  const triggerSync = useCallback(async () => {
+    setIsSyncing(true)
+    try {
+      await fetch(`${API_BASE}/api/v1/sync`, { method: 'POST' })
+    } catch {
+      // swallow
+    } finally {
+      setTimeout(() => setIsSyncing(false), 3000)
     }
   }, [])
 
@@ -84,11 +91,11 @@ export const useProcessingLogs = () => {
 
         const payload = (await response.json()) as {
           data: ProcessingLogEntry[]
-          liveUpdatesEnabled: boolean
+          devToolsEnabled: boolean
         }
 
         if (!cancelled) {
-          setIsEnabled(payload.liveUpdatesEnabled)
+          setIsEnabled(payload.devToolsEnabled)
           setLogs(payload.data.slice(-MAX_LOG_ENTRIES))
         }
       } catch {
@@ -97,6 +104,11 @@ export const useProcessingLogs = () => {
     }
 
     void loadInitial()
+    void fetchDevToolsStatus()
+
+    const pollInterval = setInterval(() => {
+      void fetchDevToolsStatus()
+    }, 30_000)
 
     const socket = io(SOCKET_BASE_URL ?? window.location.origin, {
       path: '/socket.io',
@@ -122,18 +134,21 @@ export const useProcessingLogs = () => {
 
     return () => {
       cancelled = true
+      clearInterval(pollInterval)
       socket.close()
       socketRef.current = null
     }
-  }, [])
+  }, [fetchDevToolsStatus])
 
   return useMemo(
     () => ({
       logs,
       isEnabled,
       isConnected,
-      refetch: fetchHistoricalLogs,
+      nextSyncAt,
+      isSyncing,
+      triggerSync,
     }),
-    [logs, isEnabled, isConnected, fetchHistoricalLogs],
+    [logs, isEnabled, isConnected, nextSyncAt, isSyncing, triggerSync],
   )
 }

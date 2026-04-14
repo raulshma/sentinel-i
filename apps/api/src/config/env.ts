@@ -30,7 +30,7 @@ const envSchema = z.object({
   RSS_SYNC_CRON: z.string().default('*/15 * * * *'),
   HTTP_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   CRAWL4AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
-  LIVE_UPDATES_ENABLED: z
+  DEV_TOOLS: z
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
@@ -38,7 +38,7 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse(process.env)
 
-export const isLiveUpdatesEnabled = parsedEnv.LIVE_UPDATES_ENABLED
+export const isDevToolsEnabled = parsedEnv.DEV_TOOLS
 
 export const env = {
   ...parsedEnv,

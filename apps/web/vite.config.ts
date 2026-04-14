@@ -21,6 +21,11 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, _res) => {
+            if ((err as any).code === 'ECONNABORTED') return
+          })
+        },
       },
     },
   },

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { streamText, Output, stepCountIs } from 'ai'
 
 import { aiModel, isAiEnabled } from '../config/ai.js'
-import { isLiveUpdatesEnabled } from '../config/env.js'
+import { isDevToolsEnabled } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { fetchCrawl4aiTool, fetchStandardHtmlTool } from './tools.js'
 import {
@@ -74,7 +74,7 @@ export class AgentService {
     const startedAt = Date.now()
     const articleStreamId = randomUUID()
 
-    if (isLiveUpdatesEnabled) {
+    if (isDevToolsEnabled) {
       processingEventBus.emitLog({
         sourceUrl,
         headline,
@@ -124,7 +124,7 @@ export class AgentService {
           case 'start-step': {
             stepNumber += 1
             if (reasoningBuffer.length > 0) {
-              if (isLiveUpdatesEnabled) {
+              if (isDevToolsEnabled) {
                 processingEventBus.emitLog({
                   sourceUrl,
                   headline,
@@ -139,7 +139,7 @@ export class AgentService {
               reasoningBuffer = ''
               reasoningStreamId = undefined
             }
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               processingEventBus.emitLog({
                 sourceUrl,
                 headline,
@@ -158,7 +158,7 @@ export class AgentService {
             if (!reasoningStreamId) {
               reasoningStreamId = randomUUID()
             }
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               const now = Date.now()
               if (now - lastReasoningFlush >= REASONING_FLUSH_INTERVAL_MS) {
                 lastReasoningFlush = now
@@ -178,7 +178,7 @@ export class AgentService {
 
           case 'reasoning-end': {
             if (reasoningBuffer.length > 0) {
-              if (isLiveUpdatesEnabled) {
+              if (isDevToolsEnabled) {
                 processingEventBus.emitLog({
                   sourceUrl,
                   headline,
@@ -198,7 +198,7 @@ export class AgentService {
 
           case 'tool-call': {
             audit.toolsInvoked.push(chunk.toolName)
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               processingEventBus.emitLog({
                 sourceUrl,
                 headline,
@@ -225,7 +225,7 @@ export class AgentService {
             })
             audit.extractionAttempts += 1
 
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               processingEventBus.emitLog({
                 sourceUrl,
                 headline,
@@ -240,7 +240,7 @@ export class AgentService {
           }
 
           case 'finish-step': {
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               const stepTokenSummary = formatTokenSummary(chunk.usage)
               processingEventBus.emitLog({
                 sourceUrl,
@@ -262,7 +262,7 @@ export class AgentService {
           }
 
           case 'error': {
-            if (isLiveUpdatesEnabled) {
+            if (isDevToolsEnabled) {
               processingEventBus.emitLog({
                 sourceUrl,
                 headline,
@@ -315,7 +315,7 @@ export class AgentService {
         audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`
       }
 
-      if (isLiveUpdatesEnabled) {
+      if (isDevToolsEnabled) {
         const finalTokenSummary = [
           totalUsage.inputTokens != null ? `in=${totalUsage.inputTokens}` : null,
           totalUsage.outputTokens != null ? `out=${totalUsage.outputTokens}` : null,
@@ -364,7 +364,7 @@ export class AgentService {
       audit.totalLatencyMs = Date.now() - startedAt
       audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`
 
-      if (isLiveUpdatesEnabled) {
+      if (isDevToolsEnabled) {
         processingEventBus.emitLog({
           sourceUrl,
           headline,

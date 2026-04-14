@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { Terminal, X, ChevronDown } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Terminal, X, ChevronDown, Play, Clock } from 'lucide-react'
 import type { ProcessingLogEntry, ProcessingStatus, ProcessingStage } from '../hooks/useProcessingLogs'
 
 const STAGE_LABELS: Record<ProcessingStage, string> = {
@@ -40,6 +40,9 @@ interface TerminalPanelProps {
   isConnected: boolean
   isOpen: boolean
   onToggle: () => void
+  nextSyncAt: string | null
+  isSyncing: boolean
+  onTriggerSync: () => void
 }
 
 function formatTime(iso: string): string {
@@ -50,6 +53,18 @@ function formatTime(iso: string): string {
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+function formatNextSync(iso: string | null): string {
+  if (!iso) return '...'
+  const date = new Date(iso)
+  const now = new Date()
+  const diffMs = date.getTime() - now.getTime()
+  if (diffMs <= 0) return 'now'
+  const mins = Math.floor(diffMs / 60_000)
+  const secs = Math.floor((diffMs % 60_000) / 1000)
+  if (mins > 0) return `${mins}m ${secs}s`
+  return `${secs}s`
 }
 
 function truncateText(text: string, maxLen = 50): string {
@@ -85,12 +100,28 @@ function LogEntry({ log }: { log: ProcessingLogEntry }) {
   )
 }
 
+function NextSyncCountdown({ nextSyncAt }: { nextSyncAt: string | null }) {
+  const [display, setDisplay] = useState(() => formatNextSync(nextSyncAt))
+
+  useEffect(() => {
+    const update = () => setDisplay(formatNextSync(nextSyncAt))
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [nextSyncAt])
+
+  return <span>next sync in {display}</span>
+}
+
 export function TerminalPanel({
   logs,
   isEnabled,
   isConnected,
   isOpen,
   onToggle,
+  nextSyncAt,
+  isSyncing,
+  onTriggerSync,
 }: TerminalPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const shouldAutoScroll = useRef(true)
@@ -112,22 +143,40 @@ export function TerminalPanel({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={isOpen ? 'Close processing terminal' : 'Open processing terminal'}
-        className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
-      >
-        <Terminal size={14} aria-hidden="true" />
-        <span className="hidden sm:inline">Live</span>
-        {isConnected && (
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-          </span>
-        )}
-        {isOpen ? <ChevronDown size={12} /> : null}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={isOpen ? 'Close processing terminal' : 'Open processing terminal'}
+          className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
+        >
+          <Terminal size={14} aria-hidden="true" />
+          <span className="hidden sm:inline">DevTools</span>
+          {isConnected && (
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+          )}
+          {isOpen ? <ChevronDown size={12} /> : null}
+        </button>
+
+        <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+          <Clock size={10} aria-hidden="true" />
+          <NextSyncCountdown nextSyncAt={nextSyncAt} />
+        </div>
+
+        <button
+          type="button"
+          onClick={onTriggerSync}
+          disabled={isSyncing}
+          aria-label="Trigger manual sync"
+          className="flex items-center gap-1 rounded-md bg-sky-500/20 px-2 py-1 text-[10px] font-medium text-sky-300 transition-colors hover:bg-sky-500/30 disabled:opacity-40"
+        >
+          <Play size={9} className={isSyncing ? 'animate-spin' : ''} aria-hidden="true" />
+          {isSyncing ? 'Syncing...' : 'Sync'}
+        </button>
+      </div>
 
       {isOpen && (
         <div

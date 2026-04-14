@@ -1,7 +1,7 @@
 import Parser from 'rss-parser'
 
 import { agentService } from '../agent/agentService.js'
-import { isLiveUpdatesEnabled } from '../config/env.js'
+import { isDevToolsEnabled } from '../config/env.js'
 import { cacheService } from './cache.service.js'
 import { rssFeedSources } from '../config/rssFeeds.js'
 import { logger } from '../config/logger.js'
@@ -292,7 +292,7 @@ export class RssIngestionService {
     status: Parameters<typeof processingEventBus.emitLog>[0]['status'],
     metadata?: Record<string, unknown>,
   ): void {
-    if (!isLiveUpdatesEnabled) return
+    if (!isDevToolsEnabled) return
     processingEventBus.emitLog({ sourceUrl, headline, stage, message, status, metadata })
   }
 

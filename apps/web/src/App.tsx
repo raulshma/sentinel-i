@@ -32,7 +32,7 @@ const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
 function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats()
   const { initialState, pushState } = useDeepLink()
-  const { logs, isEnabled: isLiveUpdatesEnabled, isConnected: isTerminalConnected } = useProcessingLogs()
+  const { logs, isEnabled: isDevToolsEnabled, isConnected: isTerminalConnected, nextSyncAt, isSyncing, triggerSync } = useProcessingLogs()
 
   const [selectedCategories, setSelectedCategories] = useState<NewsCategory[]>(
     initialState.categories,
@@ -214,10 +214,13 @@ function App() {
           <li className="relative">
             <TerminalPanel
               logs={logs}
-              isEnabled={isLiveUpdatesEnabled}
+              isEnabled={isDevToolsEnabled}
               isConnected={isTerminalConnected}
               isOpen={showTerminal}
               onToggle={() => setShowTerminal((prev) => !prev)}
+              nextSyncAt={nextSyncAt}
+              isSyncing={isSyncing}
+              onTriggerSync={triggerSync}
             />
           </li>
         </ul>
