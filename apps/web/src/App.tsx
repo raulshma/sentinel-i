@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 
 import { FilterPanel } from './components/FilterPanel'
-import { MapComponent } from './components/MapComponent'
-import { NewsCarousel } from './components/NewsCarousel'
-import { NationalPanel } from './components/NationalPanel'
 import { useDeepLink } from './hooks/useDeepLink'
 import { useMapData } from './hooks/useMapData'
 import { useRealtimeStats } from './hooks/useRealtimeStats'
 import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from './types/map'
+
+const MapComponent = lazy(() =>
+  import('./components/MapComponent').then((mod) => ({ default: mod.MapComponent })),
+)
+const NewsCarousel = lazy(() =>
+  import('./components/NewsCarousel').then((mod) => ({ default: mod.NewsCarousel })),
+)
+const NationalPanel = lazy(() =>
+  import('./components/NationalPanel').then((mod) => ({ default: mod.NationalPanel })),
+)
 
 const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
   { label: 'Politics', color: CATEGORY_COLORS.Politics },
@@ -97,7 +104,14 @@ function App() {
 
   return (
     <main className="flex h-screen flex-col">
-      <header className="glass-panel mx-3 mt-3 flex items-center justify-between rounded-xl px-4 py-3">
+      <a
+        href="#map-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-sky-500 focus:px-4 focus:py-2 focus:text-sm focus:text-white focus:outline-none"
+      >
+        Skip to map content
+      </a>
+
+      <header className="glass-panel mx-3 mt-3 flex items-center justify-between rounded-xl px-4 py-3" role="banner">
         <div className="flex items-center gap-4">
           <h1 className="text-base font-semibold text-white">
             Sentinel-i
@@ -107,11 +121,17 @@ function App() {
           </span>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-1.5">
+          <div
+            className="flex items-center gap-1.5"
+            role="status"
+            aria-live="polite"
+            aria-label={`Connection status: ${isSocketConnected ? 'live' : 'polling'}. ${connectedUsers} users online`}
+          >
             <div
               className={`h-2 w-2 rounded-full ${
                 isSocketConnected ? 'bg-emerald-400' : 'bg-amber-400'
               }`}
+              aria-hidden="true"
             />
             <span className="text-[11px] text-slate-400">
               {connectedUsers} online · {mode === 'websocket' ? 'Live' : 'Polling'}
@@ -120,15 +140,23 @@ function App() {
         </div>
       </header>
 
-      <div className="relative flex-1">
-        <MapComponent
-          features={features}
-          isLoading={isLoading}
-          onViewportChange={handleViewportChange}
-          onFeatureClick={handleFeatureClick}
-          initialCenter={initialState.center}
-          initialZoom={initialState.zoom}
-        />
+      <div id="map-content" className="relative flex-1" role="region" aria-label="Interactive news map">
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center" role="status" aria-label="Loading map">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+            </div>
+          }
+        >
+          <MapComponent
+            features={features}
+            isLoading={isLoading}
+            onViewportChange={handleViewportChange}
+            onFeatureClick={handleFeatureClick}
+            initialCenter={initialState.center}
+            initialZoom={initialState.zoom}
+          />
+        </Suspense>
 
         <FilterPanel
           selectedCategories={selectedCategories}
@@ -139,20 +167,24 @@ function App() {
           onToggle={() => setShowFilters((prev) => !prev)}
         />
 
-        <NationalPanel
-          items={nationalItems}
-          isVisible={showNational}
-          onToggle={() => setShowNational((prev) => !prev)}
-        />
+        <Suspense fallback={null}>
+          <NationalPanel
+            items={nationalItems}
+            isVisible={showNational}
+            onToggle={() => setShowNational((prev) => !prev)}
+          />
+        </Suspense>
 
-        <NewsCarousel
-          feature={selectedFeature}
-          onClose={handleCloseCarousel}
-        />
+        <Suspense fallback={null}>
+          <NewsCarousel
+            feature={selectedFeature}
+            onClose={handleCloseCarousel}
+          />
+        </Suspense>
       </div>
 
-      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5">
-        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
+      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5" role="contentinfo" aria-label="Category legend">
+        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1" aria-label="News categories">
           {CATEGORY_ENTRIES.map(({ label, color }) => {
             const isActive =
               selectedCategories.length === 0 || selectedCategories.includes(label as NewsCategory)
@@ -166,12 +198,13 @@ function App() {
                 <span
                   className="inline-block h-2.5 w-2.5 rounded-full"
                   style={{ backgroundColor: color }}
+                  aria-hidden="true"
                 />
                 <span className="text-[11px] text-slate-300">{label}</span>
               </li>
             )
           })}
-          <li className="ml-auto text-[10px] text-slate-500">
+          <li className="ml-auto text-[10px] text-slate-500" aria-live="polite">
             {features.length} markers · {nationalItems.length} national
           </li>
         </ul>

@@ -7,6 +7,7 @@ import { logger } from './config/logger.js'
 import { closeRedis } from './config/redis.js'
 import { closeRssQueue } from './queue/rssQueue.js'
 import { startRssScheduler, stopRssScheduler } from './queue/rssScheduler.js'
+import { startRetentionScheduler, stopRetentionScheduler } from './queue/retentionScheduler.js'
 import { socketGateway } from './socket/socketGateway.js'
 import { startRssWorker, stopRssWorker } from './workers/rssWorker.js'
 
@@ -15,6 +16,7 @@ const server = createServer(app)
 
 socketGateway.attach(server)
 startRssScheduler()
+startRetentionScheduler()
 startRssWorker()
 
 server.listen(env.PORT, () => {
@@ -43,6 +45,7 @@ const shutdown = async (signal: string): Promise<void> => {
 
   await Promise.allSettled([
     stopRssScheduler(),
+    stopRetentionScheduler(),
     stopRssWorker(),
     closeRssQueue(),
     closePgPool(),

@@ -1,6 +1,7 @@
 import Parser from 'rss-parser'
 
 import { agentService } from '../agent/agentService.js'
+import { cacheService } from './cache.service.js'
 import { rssFeedSources } from '../config/rssFeeds.js'
 import { logger } from '../config/logger.js'
 import {
@@ -355,6 +356,20 @@ export class RssIngestionService {
       return
     }
 
+    if (await cacheService.isDuplicate(sourceUrl)) {
+      summary.duplicateCount += 1
+
+      await this.repository.recordIngestionRun({
+        feedUrl,
+        decisionPath: 'Dedupe_Redis_Cache',
+        status: 'SKIPPED_DUPLICATE',
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      })
+
+      return
+    }
+
     const fingerprint = createFingerprint(headline)
 
     if (this.isLikelyDuplicate(fingerprint, dedupeFingerprints)) {
@@ -494,6 +509,7 @@ export class RssIngestionService {
     }
 
     dedupeFingerprints.push(fingerprint)
+    await cacheService.markProcessed(sourceUrl)
     socketGateway.publishNewsCreated(createdNewsItem)
 
     await this.repository.recordIngestionRun({
@@ -589,6 +605,7 @@ export class RssIngestionService {
     }
 
     dedupeFingerprints.push(fingerprint)
+    await cacheService.markProcessed(sourceUrl)
     socketGateway.publishNewsCreated(createdNewsItem)
 
     await this.repository.recordIngestionRun({

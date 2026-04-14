@@ -189,6 +189,9 @@ export function NewsCarousel({
     <div
       className="fixed inset-0 z-50 flex items-end justify-center pb-4 sm:items-center sm:pb-0"
       onClick={handleBackdropClick}
+      role="dialog"
+      aria-modal="true"
+      aria-label={feature.isCluster ? `News cluster with ${feature.count} articles` : `News article: ${feature.headline}`}
     >
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
 
@@ -214,7 +217,8 @@ export function NewsCarousel({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Close news carousel"
+            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-400"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -237,11 +241,16 @@ export function NewsCarousel({
               onScroll={handleScroll}
               className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 py-4 scroll-smooth scrollbar-hide"
               style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+              role="list"
+              aria-label="News articles carousel"
+              tabIndex={0}
             >
               {items.map((item) => (
                 <div
                   key={item.id}
                   className="min-w-full snap-center shrink-0 snap-always rounded-xl border border-white/10 bg-white/5 p-4"
+                  role="listitem"
+                  aria-label={`Article ${items.indexOf(item) + 1} of ${items.length}: ${item.headline}`}
                 >
                   <div className="mb-2 flex items-center gap-2">
                     <span
@@ -284,13 +293,16 @@ export function NewsCarousel({
             </div>
 
             {items.length > 1 && (
-              <div className="flex items-center justify-center gap-1.5 pb-3">
+              <div className="flex items-center justify-center gap-1.5 pb-3" role="tablist" aria-label="Carousel pagination">
                 {items.map((_, i) => (
                   <button
                     key={i}
                     type="button"
                     onClick={() => scrollToIndex(i)}
-                    className={`h-1.5 rounded-full transition-all duration-200 ${
+                    role="tab"
+                    aria-selected={i === currentIndex}
+                    aria-label={`Go to article ${i + 1}`}
+                    className={`h-1.5 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
                       i === currentIndex
                         ? 'w-4 bg-sky-400'
                         : 'w-1.5 bg-white/20 hover:bg-white/40'
