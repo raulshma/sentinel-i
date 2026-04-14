@@ -1,7 +1,7 @@
 import { Worker, type Job } from 'bullmq'
 
 import { env } from '../config/env.js'
-import { getRedis } from '../config/redis.js'
+import { getValkey } from '../config/valkey.js'
 import { logger } from '../config/logger.js'
 import type { RssSyncJobData } from '../queue/rssQueue.js'
 import { rssIngestionService } from '../services/rssIngestion.service.js'
@@ -28,11 +28,11 @@ export const startRssWorker = (): Worker<RssSyncJobData> => {
     return worker
   }
 
-  getRedis()
+  getValkey()
 
   worker = new Worker<RssSyncJobData>('rss-sync', processRssSyncJob, {
     connection: {
-      url: env.REDIS_URL,
+      url: env.VALKEY_URL,
     },
     concurrency: 1,
   })

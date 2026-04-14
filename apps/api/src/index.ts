@@ -4,7 +4,7 @@ import { createApp } from './app.js'
 import { closePgPool } from './config/db.js'
 import { env } from './config/env.js'
 import { logger } from './config/logger.js'
-import { closeRedis } from './config/redis.js'
+import { closeValkey } from './config/valkey.js'
 import { closeRssQueue } from './queue/rssQueue.js'
 import { startRssScheduler, stopRssScheduler } from './queue/rssScheduler.js'
 import { startRetentionScheduler, stopRetentionScheduler } from './queue/retentionScheduler.js'
@@ -49,7 +49,7 @@ const shutdown = async (signal: string): Promise<void> => {
     stopRssWorker(),
     closeRssQueue(),
     closePgPool(),
-    closeRedis(),
+    closeValkey(),
   ])
 
   server.close((error) => {

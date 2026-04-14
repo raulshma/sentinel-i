@@ -1,13 +1,13 @@
 import { Queue } from 'bullmq'
 
-import { getRedis } from '../config/redis.js'
+import { getValkey } from '../config/valkey.js'
 
 export type RssSyncJobData = {
   triggeredAt: string
 }
 
 export const rssSyncQueue = new Queue<RssSyncJobData>('rss-sync', {
-  connection: getRedis(),
+  connection: getValkey(),
   defaultJobOptions: {
     attempts: 3,
     backoff: {

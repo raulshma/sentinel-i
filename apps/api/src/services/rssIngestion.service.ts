@@ -361,7 +361,7 @@ export class RssIngestionService {
 
       await this.repository.recordIngestionRun({
         feedUrl,
-        decisionPath: 'Dedupe_Redis_Cache',
+        decisionPath: 'Dedupe_Valkey_Cache',
         status: 'SKIPPED_DUPLICATE',
         startedAt: itemStartedAt,
         finishedAt: new Date(),

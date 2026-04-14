@@ -1,4 +1,4 @@
-import { getRedis } from '../config/redis.js'
+import { getValkey } from '../config/valkey.js'
 import { logger } from '../config/logger.js'
 
 const CACHE_PREFIX = 'sentinel:cache:'
@@ -7,8 +7,8 @@ const VIEWPORT_TTL_SECONDS = 120
 const DEDUPE_TTL_SECONDS = 900
 
 export class CacheService {
-  private get redis() {
-    return getRedis()
+  private get valkey() {
+    return getValkey()
   }
 
   private viewportKey(query: Record<string, unknown>): string {
@@ -21,7 +21,7 @@ export class CacheService {
   async getViewport<T>(query: Record<string, unknown>): Promise<T | null> {
     try {
       const key = this.viewportKey(query)
-      const cached = await this.redis.get(key)
+      const cached = await this.valkey.get(key)
 
       if (cached) {
         return JSON.parse(cached) as T
@@ -40,7 +40,7 @@ export class CacheService {
   ): Promise<void> {
     try {
       const key = this.viewportKey(query)
-      await this.redis.setex(key, ttlSeconds, JSON.stringify(data))
+      await this.valkey.setex(key, ttlSeconds, JSON.stringify(data))
     } catch (error) {
       logger.warn({ error }, 'Cache write failed for viewport query')
     }
@@ -48,7 +48,7 @@ export class CacheService {
 
   async invalidateViewport(): Promise<void> {
     try {
-      const stream = this.redis.scanStream({
+      const stream = this.valkey.scanStream({
         match: `${CACHE_PREFIX}viewport:*`,
         count: 100,
       })
@@ -62,7 +62,7 @@ export class CacheService {
       await new Promise<void>((resolve, reject) => {
         stream.on('end', () => {
           if (keys.length > 0) {
-            void this.redis.del(...keys)
+            void this.valkey.del(...keys)
           }
           resolve()
         })
@@ -77,7 +77,7 @@ export class CacheService {
     try {
       const normalizedUrl = sourceUrl.toLowerCase().trim()
       const key = `${DEDUPE_PREFIX}${Buffer.from(normalizedUrl).toString('base64url')}`
-      const exists = await this.redis.exists(key)
+      const exists = await this.valkey.exists(key)
       return exists === 1
     } catch (error) {
       logger.warn({ error }, 'Dedupe cache read failed')
@@ -89,7 +89,7 @@ export class CacheService {
     try {
       const normalizedUrl = sourceUrl.toLowerCase().trim()
       const key = `${DEDUPE_PREFIX}${Buffer.from(normalizedUrl).toString('base64url')}`
-      await this.redis.setex(key, DEDUPE_TTL_SECONDS, '1')
+      await this.valkey.setex(key, DEDUPE_TTL_SECONDS, '1')
     } catch (error) {
       logger.warn({ error }, 'Dedupe cache write failed')
     }

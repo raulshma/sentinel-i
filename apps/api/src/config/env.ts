@@ -11,7 +11,7 @@ const envSchema = z.object({
     .string()
     .min(1)
     .default('postgresql://postgres:postgres@localhost:5432/sentinel_i'),
-  REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
+  VALKEY_URL: z.string().min(1).default('redis://localhost:6379'),
   AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z

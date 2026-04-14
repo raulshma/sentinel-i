@@ -2,12 +2,12 @@ import type { Request, Response } from 'express'
 
 import { pingDatabase } from '../config/db.js'
 import { env } from '../config/env.js'
-import { pingRedis } from '../config/redis.js'
+import { pingValkey } from '../config/valkey.js'
 
 export const getHealth = async (_req: Request, res: Response): Promise<void> => {
-  const [databaseOk, redisOk] = await Promise.all([pingDatabase(), pingRedis()])
+  const [databaseOk, valkeyOk] = await Promise.all([pingDatabase(), pingValkey()])
 
-  const overallOk = databaseOk && redisOk
+  const overallOk = databaseOk && valkeyOk
 
   res.status(overallOk ? 200 : 503).json({
     status: overallOk ? 'ok' : 'degraded',
@@ -16,7 +16,7 @@ export const getHealth = async (_req: Request, res: Response): Promise<void> => 
     timestamp: new Date().toISOString(),
     services: {
       database: databaseOk ? 'up' : 'down',
-      redis: redisOk ? 'up' : 'down',
+      valkey: valkeyOk ? 'up' : 'down',
       websocket: 'up',
     },
   })
