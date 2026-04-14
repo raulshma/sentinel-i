@@ -1,5 +1,6 @@
 import Parser from 'rss-parser'
 
+import { agentService } from '../agent/agentService.js'
 import { rssFeedSources } from '../config/rssFeeds.js'
 import { logger } from '../config/logger.js'
 import {
@@ -372,106 +373,231 @@ export class RssIngestionService {
 
     const rawSummary = normalizeText(item.contentSnippet ?? item.content ?? headline)
 
-    let fetchResult: FetchArticleContentOutput = {
-      content: rawSummary,
-      decisionPath: 'RSS_Sufficient',
-      strategyUsed: 'rss',
-    }
-
     try {
-      fetchResult = await contentFetchService.fetchBestContent(sourceUrl, rawSummary)
+      const agentResult = await agentService.processArticle(headline, rawSummary, sourceUrl)
 
-      const fullText = normalizeText(`${headline} ${fetchResult.content}`)
-      const baseCategory = categorizeArticle(fullText)
-      const location = inferLocation(fullText)
-
-      let latitude: number | null = null
-      let longitude: number | null = null
-      let isNational = false
-      let category: NewsCategory = baseCategory
-
-      if (location.locationName) {
-        const coordinates = await geocodeService.forwardGeocode({
-          locationName: location.locationName,
-          city: location.city,
-          state: location.state,
-        })
-
-        if (coordinates) {
-          latitude = coordinates.latitude
-          longitude = coordinates.longitude
-        } else {
-          isNational = true
-        }
-      } else {
-        isNational = true
-      }
-
-      if (isNational) {
-        category = 'Uncategorized / National'
-      }
-
-      const createdNewsItem = await this.repository.createNewsItem({
-        sourceUrl,
-        headline,
-        summary: fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
-        category,
-        locationName: isNational ? null : location.locationName,
-        city: isNational ? null : location.city,
-        state: isNational ? null : location.state,
-        isNational,
-        latitude,
-        longitude,
-        publishedAt: resolvePublishedAt(item),
-      })
-
-      if (!createdNewsItem) {
-        summary.duplicateCount += 1
-
-        await this.repository.recordIngestionRun({
+      if (agentResult) {
+        await this.processWithAgentExtraction(
+          agentResult.extraction,
+          agentResult.audit.decisionPath,
+          sourceUrl,
+          rawSummary,
           feedUrl,
-          decisionPath: `${fetchResult.decisionPath} -> Insert_Conflict_or_Error`,
-          status: 'SKIPPED_CONFLICT',
-          startedAt: itemStartedAt,
-          finishedAt: new Date(),
-        })
-
+          itemStartedAt,
+          summary,
+          dedupeFingerprints,
+          fingerprint,
+          item,
+        )
         return
       }
 
-      summary.inserted += 1
-
-      if (createdNewsItem.isNational) {
-        summary.nationalCount += 1
-      }
-
-      dedupeFingerprints.push(fingerprint)
-      socketGateway.publishNewsCreated(createdNewsItem)
-
-      await this.repository.recordIngestionRun({
+      await this.processWithRuleBasedExtraction(
+        headline,
+        rawSummary,
+        sourceUrl,
         feedUrl,
-        decisionPath: fetchResult.decisionPath,
-        status: 'SUCCESS',
-        startedAt: itemStartedAt,
-        finishedAt: new Date(),
-      })
+        itemStartedAt,
+        summary,
+        dedupeFingerprints,
+        fingerprint,
+        item,
+      )
     } catch (error) {
       summary.errorCount += 1
 
       logger.error(
-        { error, feedUrl, sourceUrl, strategy: fetchResult.strategyUsed },
+        { error, feedUrl, sourceUrl },
         'RSS item ingestion failed',
       )
 
       await this.repository.recordIngestionRun({
         feedUrl,
-        decisionPath: `${fetchResult.decisionPath} -> Item_Processing_Failed`,
+        decisionPath: 'Item_Processing_Failed',
         status: 'FAILED',
         errorMessage: error instanceof Error ? error.message : 'Unknown processing error',
         startedAt: itemStartedAt,
         finishedAt: new Date(),
       })
     }
+  }
+
+  private async processWithAgentExtraction(
+    extraction: import('../types/ai.js').NewsExtraction,
+    agentDecisionPath: string,
+    sourceUrl: string,
+    rawSummary: string,
+    feedUrl: string,
+    itemStartedAt: Date,
+    summary: RssIngestionSummary,
+    dedupeFingerprints: HeadlineFingerprint[],
+    fingerprint: HeadlineFingerprint,
+    item: RssItem,
+  ): Promise<void> {
+    const isNational =
+      !extraction.location_name && !extraction.city && !extraction.state
+
+    let latitude: number | null = null
+    let longitude: number | null = null
+
+    if (!isNational && (extraction.location_name || extraction.city || extraction.state)) {
+      const coordinates = await geocodeService.forwardGeocode({
+        locationName: extraction.location_name ?? extraction.city ?? extraction.state ?? '',
+        city: extraction.city,
+        state: extraction.state,
+      })
+
+      if (coordinates) {
+        latitude = coordinates.latitude
+        longitude = coordinates.longitude
+      }
+    }
+
+    const category: NewsCategory = isNational
+      ? 'Uncategorized / National'
+      : extraction.category === 'Uncategorized / National'
+        ? 'General'
+        : extraction.category
+
+    const createdNewsItem = await this.repository.createNewsItem({
+      sourceUrl,
+      headline: extraction.headline,
+      summary: extraction.summary.length > 0 ? extraction.summary : rawSummary,
+      category,
+      locationName: isNational ? null : extraction.location_name,
+      city: isNational ? null : extraction.city,
+      state: isNational ? null : extraction.state,
+      isNational,
+      latitude,
+      longitude,
+      publishedAt: resolvePublishedAt(item),
+    })
+
+    if (!createdNewsItem) {
+      summary.duplicateCount += 1
+
+      await this.repository.recordIngestionRun({
+        feedUrl,
+        decisionPath: `${agentDecisionPath} -> Insert_Conflict_or_Error`,
+        status: 'SKIPPED_CONFLICT',
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      })
+
+      return
+    }
+
+    summary.inserted += 1
+
+    if (createdNewsItem.isNational) {
+      summary.nationalCount += 1
+    }
+
+    dedupeFingerprints.push(fingerprint)
+    socketGateway.publishNewsCreated(createdNewsItem)
+
+    await this.repository.recordIngestionRun({
+      feedUrl,
+      decisionPath: agentDecisionPath,
+      status: 'SUCCESS',
+      startedAt: itemStartedAt,
+      finishedAt: new Date(),
+    })
+  }
+
+  private async processWithRuleBasedExtraction(
+    headline: string,
+    rawSummary: string,
+    sourceUrl: string,
+    feedUrl: string,
+    itemStartedAt: Date,
+    summary: RssIngestionSummary,
+    dedupeFingerprints: HeadlineFingerprint[],
+    fingerprint: HeadlineFingerprint,
+    item: RssItem,
+  ): Promise<void> {
+    let fetchResult: FetchArticleContentOutput = {
+      content: rawSummary,
+      decisionPath: 'RSS_Sufficient',
+      strategyUsed: 'rss',
+    }
+
+    fetchResult = await contentFetchService.fetchBestContent(sourceUrl, rawSummary)
+
+    const fullText = normalizeText(`${headline} ${fetchResult.content}`)
+    const baseCategory = categorizeArticle(fullText)
+    const location = inferLocation(fullText)
+
+    let latitude: number | null = null
+    let longitude: number | null = null
+    let isNational = false
+    let category: NewsCategory = baseCategory
+
+    if (location.locationName) {
+      const coordinates = await geocodeService.forwardGeocode({
+        locationName: location.locationName,
+        city: location.city,
+        state: location.state,
+      })
+
+      if (coordinates) {
+        latitude = coordinates.latitude
+        longitude = coordinates.longitude
+      } else {
+        isNational = true
+      }
+    } else {
+      isNational = true
+    }
+
+    if (isNational) {
+      category = 'Uncategorized / National'
+    }
+
+    const createdNewsItem = await this.repository.createNewsItem({
+      sourceUrl,
+      headline,
+      summary: fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
+      category,
+      locationName: isNational ? null : location.locationName,
+      city: isNational ? null : location.city,
+      state: isNational ? null : location.state,
+      isNational,
+      latitude,
+      longitude,
+      publishedAt: resolvePublishedAt(item),
+    })
+
+    if (!createdNewsItem) {
+      summary.duplicateCount += 1
+
+      await this.repository.recordIngestionRun({
+        feedUrl,
+        decisionPath: `${fetchResult.decisionPath} -> Insert_Conflict_or_Error`,
+        status: 'SKIPPED_CONFLICT',
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      })
+
+      return
+    }
+
+    summary.inserted += 1
+
+    if (createdNewsItem.isNational) {
+      summary.nationalCount += 1
+    }
+
+    dedupeFingerprints.push(fingerprint)
+    socketGateway.publishNewsCreated(createdNewsItem)
+
+    await this.repository.recordIngestionRun({
+      feedUrl,
+      decisionPath: `RuleBased_Fallback -> ${fetchResult.decisionPath}`,
+      status: 'SUCCESS',
+      startedAt: itemStartedAt,
+      finishedAt: new Date(),
+    })
   }
 
   private isLikelyDuplicate(

@@ -33,6 +33,13 @@ services:
       timeout: 5s
       retries: 5
 
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: sentinel-crawl4ai
+    restart: unless-stopped
+    ports:
+      - "${CRAWL4AI_PORT:-11235}:11235"
+
 volumes:
   postgres_data:
   redis_data:

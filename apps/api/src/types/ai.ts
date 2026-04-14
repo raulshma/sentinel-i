@@ -1,0 +1,61 @@
+import { z } from 'zod'
+
+export const newsExtractionSchema = z.object({
+  location_name: z
+    .string()
+    .describe(
+      'Specific landmark, neighborhood, or district mentioned in the article. Null if not locally specific.',
+    )
+    .nullable(),
+  city: z
+    .string()
+    .describe('City name if found in the article. Null if not mentioned.')
+    .nullable(),
+  state: z
+    .string()
+    .describe('Indian state or union territory. Null if not mentioned.')
+    .nullable(),
+  category: z
+    .enum([
+      'Politics',
+      'Business',
+      'Technology',
+      'Sports',
+      'Entertainment',
+      'Crime',
+      'Weather',
+      'General',
+      'Uncategorized / National',
+    ])
+    .describe('Best-fit category for the article.'),
+  headline: z
+    .string()
+    .min(5)
+    .describe('A concise, factual headline summarizing the article.'),
+  summary: z
+    .string()
+    .min(20)
+    .describe(
+      'A 2-3 sentence summary of the article including key facts and context.',
+    ),
+})
+
+export type NewsExtraction = z.infer<typeof newsExtractionSchema>
+
+export interface AgentDecisionAudit {
+  decisionPath: string
+  toolsInvoked: string[]
+  toolResults: Array<{ tool: string; success: boolean; latencyMs: number }>
+  extractionAttempts: number
+  totalLatencyMs: number
+  tokensUsed?: {
+    prompt?: number
+    completion?: number
+    total?: number
+  }
+}
+
+export interface AgentProcessResult {
+  extraction: NewsExtraction
+  audit: AgentDecisionAudit
+}
