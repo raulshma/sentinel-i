@@ -24,9 +24,6 @@ const envSchema = z.object({
     .default('nvidia/nemotron-3-super-120b-a12b:free'),
   GEOCODE_API_KEY: z.string().optional(),
   GEOCODE_BASE_URL: z.string().url().default('https://geocode.maps.co'),
-  CREW4AI_API_URL: z.string().optional(),
-  CREW4AI_API_KEY: z.string().optional(),
-  CREW4AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   CRAWL4AI_API_URL: z.string().optional(),
   CRAWL4AI_API_KEY: z.string().optional(),
   RSS_FEED_URLS: z.string().optional(),
@@ -41,19 +38,9 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse(process.env)
 
-const crawl4aiApiUrl = parsedEnv.CRAWL4AI_API_URL ?? parsedEnv.CREW4AI_API_URL
-const crawl4aiApiKey = parsedEnv.CRAWL4AI_API_KEY ?? parsedEnv.CREW4AI_API_KEY
-const crawl4aiTimeoutMs =
-  parsedEnv.CRAWL4AI_TIMEOUT_MS ?? parsedEnv.CREW4AI_TIMEOUT_MS ?? 15_000
-
 export const isLiveUpdatesEnabled = parsedEnv.LIVE_UPDATES_ENABLED
 
 export const env = {
   ...parsedEnv,
-  CRAWL4AI_API_URL: crawl4aiApiUrl,
-  CRAWL4AI_API_KEY: crawl4aiApiKey,
-  CRAWL4AI_TIMEOUT_MS: crawl4aiTimeoutMs,
-  CREW4AI_API_URL: parsedEnv.CREW4AI_API_URL ?? crawl4aiApiUrl,
-  CREW4AI_API_KEY: parsedEnv.CREW4AI_API_KEY ?? crawl4aiApiKey,
-  CREW4AI_TIMEOUT_MS: parsedEnv.CREW4AI_TIMEOUT_MS ?? crawl4aiTimeoutMs,
+  CRAWL4AI_TIMEOUT_MS: parsedEnv.CRAWL4AI_TIMEOUT_MS ?? 15_000,
 }
