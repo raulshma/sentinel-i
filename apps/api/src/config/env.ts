@@ -17,7 +17,10 @@ const envSchema = z.object({
   GEOCODE_BASE_URL: z.string().url().default('https://geocode.maps.co'),
   CRAWL4AI_API_URL: z.string().optional(),
   CRAWL4AI_API_KEY: z.string().optional(),
+  RSS_FEED_URLS: z.string().optional(),
   RSS_SYNC_CRON: z.string().default('*/15 * * * *'),
+  HTTP_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  CRAWL4AI_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
 })
 
 export const env = envSchema.parse(process.env)

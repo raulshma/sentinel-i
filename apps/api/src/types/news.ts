@@ -42,6 +42,29 @@ export interface RealtimeStats {
   fallbackPollingIntervalMs: number
 }
 
+export interface CreateNewsItemInput {
+  sourceUrl: string
+  headline: string
+  summary: string
+  category: NewsCategory
+  locationName: string | null
+  city: string | null
+  state: string | null
+  isNational: boolean
+  latitude: number | null
+  longitude: number | null
+  publishedAt: string
+}
+
+export interface IngestionRunInput {
+  feedUrl: string
+  decisionPath: string
+  status: string
+  errorMessage?: string | null
+  startedAt?: Date
+  finishedAt?: Date
+}
+
 export const isNewsCategory = (value: string): value is NewsCategory => {
   return NEWS_CATEGORIES.includes(value as NewsCategory)
 }

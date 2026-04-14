@@ -4,22 +4,23 @@ import { env } from '../config/env.js'
 import { getRedis } from '../config/redis.js'
 import { logger } from '../config/logger.js'
 import type { RssSyncJobData } from '../queue/rssQueue.js'
+import { rssIngestionService } from '../services/rssIngestion.service.js'
 
 let worker: Worker<RssSyncJobData> | null = null
 
 const processRssSyncJob = async (job: Job<RssSyncJobData>): Promise<void> => {
+  logger.info({ jobId: job.id, triggeredAt: job.data.triggeredAt }, 'RSS sync job started')
+
+  const summary = await rssIngestionService.runIngestionCycle()
+
   logger.info(
-    { jobId: job.id, triggeredAt: job.data.triggeredAt },
-    'RSS sync worker placeholder executed',
+    {
+      jobId: job.id,
+      triggeredAt: job.data.triggeredAt,
+      summary,
+    },
+    'RSS sync job completed',
   )
-
-  // Phase 2 implementation target:
-  // 1) Fetch RSS feed batch
-  // 2) Deduplicate
-  // 3) Agentic scrape + extraction
-  // 4) Geocode + persist
-
-  await Promise.resolve()
 }
 
 export const startRssWorker = (): Worker<RssSyncJobData> => {
