@@ -52,7 +52,11 @@ export interface AgentDecisionAudit {
     prompt?: number
     completion?: number
     total?: number
+    reasoning?: number
   }
+  throughputTokensPerSecond?: number
+  reasoningText?: string
+  providerMetadata?: Record<string, unknown>
 }
 
 export interface AgentProcessResult {

@@ -10,6 +10,7 @@ const STAGE_LABELS: Record<ProcessingStage, string> = {
   content_parse: 'EXTRACT',
   ai_processing: 'AI',
   ai_tool_call: 'TOOL',
+  ai_reasoning: 'THINK',
   geocoding: 'GEO',
   fact_check: 'FACT',
   storage: 'STORE',
@@ -26,11 +27,11 @@ const STATUS_COLORS: Record<ProcessingStatus, string> = {
 }
 
 const STATUS_INDICATORS: Record<ProcessingStatus, string> = {
-  info: '○',
-  success: '●',
-  warn: '▲',
-  error: '✕',
-  start: '→',
+  info: '\u25CB',
+  success: '\u25CF',
+  warn: '\u25B2',
+  error: '\u2715',
+  start: '\u2192',
 }
 
 interface TerminalPanelProps {
@@ -51,9 +52,37 @@ function formatTime(iso: string): string {
   })
 }
 
-function truncateUrl(url: string, maxLen = 50): string {
-  if (url.length <= maxLen) return url
-  return url.slice(0, maxLen - 3) + '...'
+function truncateText(text: string, maxLen = 50): string {
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen - 3) + '...'
+}
+
+function LogEntry({ log }: { log: ProcessingLogEntry }) {
+  const isReasoning = log.stage === 'ai_reasoning'
+  const isStreaming = isReasoning && log.isStreaming
+
+  return (
+    <div
+      className={`flex gap-2 px-1 py-0.5 ${isReasoning ? 'bg-violet-500/5 border-l-2 border-violet-500/30' : 'hover:bg-white/5'}`}
+    >
+      <span className="shrink-0 text-slate-600">{formatTime(log.createdAt)}</span>
+      <span
+        className={`shrink-0 w-12 text-right ${STATUS_COLORS[log.status]} ${isReasoning ? '!text-violet-400' : ''}`}
+        aria-hidden="true"
+      >
+        {STATUS_INDICATORS[log.status]} {STAGE_LABELS[log.stage]}
+      </span>
+      <span className={`min-w-0 break-all whitespace-pre-wrap ${isReasoning ? 'text-violet-300/80 text-[10px] italic' : 'text-slate-300'}`}>
+        {isReasoning ? `Reasoning: ${log.message}` : log.message}
+        {isStreaming && (
+          <span className="inline-block w-1.5 h-3 ml-0.5 bg-violet-400 animate-pulse align-text-bottom" />
+        )}
+        {log.headline && !isReasoning && (
+          <span className="text-slate-500">{' \u2014 '}{truncateText(log.headline, 60)}</span>
+        )}
+      </span>
+    </div>
+  )
 }
 
 export function TerminalPanel({
@@ -136,21 +165,7 @@ export function TerminalPanel({
               </div>
             )}
             {logs.map((log, idx) => (
-              <div key={log.id ?? idx} className="flex gap-2 hover:bg-white/5 px-1 py-0.5">
-                <span className="shrink-0 text-slate-600">{formatTime(log.createdAt)}</span>
-                <span
-                  className={`shrink-0 w-12 text-right ${STATUS_COLORS[log.status]}`}
-                  aria-hidden="true"
-                >
-                  {STATUS_INDICATORS[log.status]} {STAGE_LABELS[log.stage]}
-                </span>
-                <span className="min-w-0 break-all text-slate-300">
-                  {log.message}
-                  {log.headline && (
-                    <span className="text-slate-500"> — {truncateUrl(log.headline, 60)}</span>
-                  )}
-                </span>
-              </div>
+              <LogEntry key={log.streamId ?? log.id ?? idx} log={log} />
             ))}
           </div>
         </div>

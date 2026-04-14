@@ -8,6 +8,7 @@ export type ProcessingStage =
   | 'content_parse'
   | 'ai_processing'
   | 'ai_tool_call'
+  | 'ai_reasoning'
   | 'geocoding'
   | 'fact_check'
   | 'storage'
@@ -24,6 +25,8 @@ export interface ProcessingLogEntry {
   message: string
   status: ProcessingStatus
   metadata?: Record<string, unknown>
+  streamId?: string
+  isStreaming?: boolean
   createdAt: string
 }
 

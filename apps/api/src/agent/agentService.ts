@@ -1,15 +1,17 @@
-import { generateText, Output, stepCountIs } from "ai";
+import { randomUUID } from 'node:crypto'
 
-import { aiModel, isAiEnabled } from "../config/ai.js";
-import { isLiveUpdatesEnabled } from "../config/env.js";
-import { logger } from "../config/logger.js";
-import { fetchCrawl4aiTool, fetchStandardHtmlTool } from "./tools.js";
+import { streamText, Output, stepCountIs } from 'ai'
+
+import { aiModel, isAiEnabled } from '../config/ai.js'
+import { isLiveUpdatesEnabled } from '../config/env.js'
+import { logger } from '../config/logger.js'
+import { fetchCrawl4aiTool, fetchStandardHtmlTool } from './tools.js'
 import {
   newsExtractionSchema,
   type AgentDecisionAudit,
   type AgentProcessResult,
-} from "../types/ai.js";
-import { processingEventBus } from "../services/processingEventBus.js";
+} from '../types/ai.js'
+import { processingEventBus } from '../services/processingEventBus.js'
 
 const SYSTEM_PROMPT = `You are a geo-spatial news extraction agent for Indian news articles.
 
@@ -43,11 +45,20 @@ Your task is to analyze news article content and extract structured data with a 
 ## Important:
 - Only identify locations in India.
 - If the article is about national-level news with no specific city/state, set location_name/city/state to null and use category "Uncategorized / National".
-- Never fabricate or guess locations. If uncertain, mark as null.`;
+- Never fabricate or guess locations. If uncertain, mark as null.`
+
+const REASONING_FLUSH_INTERVAL_MS = 150
+
+function formatTokenSummary(usage: { inputTokens?: number | undefined; outputTokens?: number | undefined }): string {
+  return [
+    usage.inputTokens != null ? `in=${usage.inputTokens}` : null,
+    usage.outputTokens != null ? `out=${usage.outputTokens}` : null,
+  ].filter(Boolean).join(', ')
+}
 
 export class AgentService {
   private isEnabled(): boolean {
-    return isAiEnabled();
+    return isAiEnabled()
   }
 
   async processArticle(
@@ -56,42 +67,42 @@ export class AgentService {
     sourceUrl: string,
   ): Promise<AgentProcessResult | null> {
     if (!this.isEnabled()) {
-      logger.debug(
-        "OpenRouter API key not configured; skipping AI agent processing",
-      );
-      return null;
+      logger.debug('OpenRouter API key not configured; skipping AI agent processing')
+      return null
     }
 
-    const startedAt = Date.now();
+    const startedAt = Date.now()
+    const articleStreamId = randomUUID()
 
     if (isLiveUpdatesEnabled) {
       processingEventBus.emitLog({
         sourceUrl,
         headline,
         stage: 'ai_processing',
-        message: `Sending article to AI model for extraction...`,
+        message: 'Streaming article to AI model...',
         status: 'start',
+        streamId: articleStreamId,
       })
     }
 
     const audit: AgentDecisionAudit = {
-      decisionPath: "Agent_Invoked",
+      decisionPath: 'Agent_Invoked',
       toolsInvoked: [],
       toolResults: [],
       extractionAttempts: 1,
       totalLatencyMs: 0,
-    };
+    }
 
     const userContent = [
       `## Article URL: ${sourceUrl}`,
       `## Headline: ${headline}`,
       `## Content:\n${content}`,
-      "",
-      "Extract the structured data from this Indian news article. If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.",
-    ].join("\n");
+      '',
+      'Extract the structured data from this Indian news article. If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.',
+    ].join('\n')
 
     try {
-      const result = await generateText({
+      const result = streamText({
         model: aiModel,
         output: Output.object({ schema: newsExtractionSchema }),
         system: SYSTEM_PROMPT,
@@ -101,65 +112,236 @@ export class AgentService {
           fetch_standard_html: fetchStandardHtmlTool,
         },
         stopWhen: stepCountIs(4),
-      });
+      })
 
-      audit.totalLatencyMs = Date.now() - startedAt;
+      let reasoningBuffer = ''
+      let lastReasoningFlush = 0
+      let reasoningStreamId: string | undefined
+      let stepNumber = 0
 
-      const usage = result.totalUsage;
-      audit.tokensUsed = {
-        prompt: usage.inputTokens ?? undefined,
-        completion: usage.outputTokens ?? undefined,
-        total: usage.totalTokens ?? undefined,
-      };
+      for await (const chunk of result.fullStream) {
+        switch (chunk.type) {
+          case 'start-step': {
+            stepNumber += 1
+            if (reasoningBuffer.length > 0) {
+              if (isLiveUpdatesEnabled) {
+                processingEventBus.emitLog({
+                  sourceUrl,
+                  headline,
+                  stage: 'ai_reasoning',
+                  message: reasoningBuffer,
+                  status: 'info',
+                  streamId: reasoningStreamId,
+                  isStreaming: false,
+                  metadata: { reasoningLength: reasoningBuffer.length },
+                })
+              }
+              reasoningBuffer = ''
+              reasoningStreamId = undefined
+            }
+            if (isLiveUpdatesEnabled) {
+              processingEventBus.emitLog({
+                sourceUrl,
+                headline,
+                stage: 'ai_processing',
+                message: `LLM step ${stepNumber} started...`,
+                status: 'start',
+                streamId: articleStreamId,
+                metadata: { stepNumber },
+              })
+            }
+            break
+          }
 
-      for (const step of result.steps) {
-        if (step.toolCalls && step.toolCalls.length > 0) {
-          for (const toolCall of step.toolCalls) {
-            audit.toolsInvoked.push(toolCall.toolName);
+          case 'reasoning-delta': {
+            reasoningBuffer += chunk.text
+            if (!reasoningStreamId) {
+              reasoningStreamId = randomUUID()
+            }
+            if (isLiveUpdatesEnabled) {
+              const now = Date.now()
+              if (now - lastReasoningFlush >= REASONING_FLUSH_INTERVAL_MS) {
+                lastReasoningFlush = now
+                processingEventBus.emitLog({
+                  sourceUrl,
+                  headline,
+                  stage: 'ai_reasoning',
+                  message: reasoningBuffer,
+                  status: 'info',
+                  streamId: reasoningStreamId,
+                  isStreaming: true,
+                })
+              }
+            }
+            break
+          }
+
+          case 'reasoning-end': {
+            if (reasoningBuffer.length > 0) {
+              if (isLiveUpdatesEnabled) {
+                processingEventBus.emitLog({
+                  sourceUrl,
+                  headline,
+                  stage: 'ai_reasoning',
+                  message: reasoningBuffer,
+                  status: 'info',
+                  streamId: reasoningStreamId,
+                  isStreaming: false,
+                  metadata: { reasoningLength: reasoningBuffer.length },
+                })
+              }
+              reasoningBuffer = ''
+              reasoningStreamId = undefined
+            }
+            break
+          }
+
+          case 'tool-call': {
+            audit.toolsInvoked.push(chunk.toolName)
+            if (isLiveUpdatesEnabled) {
+              processingEventBus.emitLog({
+                sourceUrl,
+                headline,
+                stage: 'ai_tool_call',
+                message: `Invoking tool: ${chunk.toolName}`,
+                status: 'info',
+                streamId: articleStreamId,
+                metadata: { toolName: chunk.toolName },
+              })
+            }
+            break
+          }
+
+          case 'tool-result': {
+            const resultData = chunk.output as
+              | { success: boolean; error?: string | null }
+              | undefined
+            const success = resultData?.success ?? false
+
+            audit.toolResults.push({
+              tool: chunk.toolName,
+              success,
+              latencyMs: 0,
+            })
+            audit.extractionAttempts += 1
 
             if (isLiveUpdatesEnabled) {
               processingEventBus.emitLog({
                 sourceUrl,
                 headline,
                 stage: 'ai_tool_call',
-                message: `AI agent invoked tool: ${toolCall.toolName}`,
-                status: 'info',
-                metadata: { toolName: toolCall.toolName },
+                message: `Tool ${chunk.toolName} ${success ? 'succeeded' : 'failed'}`,
+                status: success ? 'success' : 'warn',
+                streamId: articleStreamId,
+                metadata: { toolName: chunk.toolName, success },
               })
             }
+            break
+          }
 
-            const matchedResult = step.toolResults.find(
-              (r: { toolCallId: string }) =>
-                r.toolCallId === toolCall.toolCallId,
-            );
+          case 'finish-step': {
+            if (isLiveUpdatesEnabled) {
+              const stepTokenSummary = formatTokenSummary(chunk.usage)
+              processingEventBus.emitLog({
+                sourceUrl,
+                headline,
+                stage: 'ai_processing',
+                message: `Step ${stepNumber} done [${stepTokenSummary}] reason=${chunk.finishReason}`,
+                status: 'success',
+                streamId: articleStreamId,
+                metadata: {
+                  stepNumber,
+                  finishReason: chunk.finishReason,
+                  inputTokens: chunk.usage.inputTokens,
+                  outputTokens: chunk.usage.outputTokens,
+                  providerMetadata: chunk.providerMetadata,
+                },
+              })
+            }
+            break
+          }
 
-            const resultData = matchedResult?.output as
-              | { success: boolean; error?: string | null }
-              | undefined;
-
-            audit.toolResults.push({
-              tool: toolCall.toolName,
-              success: resultData?.success ?? false,
-              latencyMs: 0,
-            });
+          case 'error': {
+            if (isLiveUpdatesEnabled) {
+              processingEventBus.emitLog({
+                sourceUrl,
+                headline,
+                stage: 'error',
+                message: `Stream error: ${chunk.error instanceof Error ? chunk.error.message : 'Unknown error'}`,
+                status: 'error',
+                streamId: articleStreamId,
+              })
+            }
+            break
           }
         }
+      }
 
-        if (step.toolResults && step.toolResults.length > 0) {
-          audit.extractionAttempts += 1;
-        }
+      const [totalUsage, extraction, steps, providerMetadataResult, reasoningText] = await Promise.all([
+        result.totalUsage,
+        result.output,
+        result.steps,
+        result.providerMetadata,
+        result.reasoningText,
+      ])
+
+      audit.totalLatencyMs = Date.now() - startedAt
+
+      const reasoningTokens = totalUsage.outputTokenDetails?.reasoningTokens ?? undefined
+
+      audit.tokensUsed = {
+        prompt: totalUsage.inputTokens ?? undefined,
+        completion: totalUsage.outputTokens ?? undefined,
+        total: totalUsage.totalTokens ?? undefined,
+        reasoning: reasoningTokens,
+      }
+
+      if (audit.totalLatencyMs > 0 && totalUsage.totalTokens) {
+        audit.throughputTokensPerSecond = Math.round((totalUsage.totalTokens / audit.totalLatencyMs) * 1000)
+      }
+
+      audit.reasoningText = reasoningText
+
+      if (providerMetadataResult) {
+        audit.providerMetadata = providerMetadataResult as Record<string, unknown>
       }
 
       if (audit.toolsInvoked.length === 0) {
-        audit.decisionPath = "Agent_RSS_Sufficient";
+        audit.decisionPath = 'Agent_RSS_Sufficient'
       } else {
         const toolSummary = audit.toolResults
-          .map((t) => `${t.tool} -> ${t.success ? "Success" : "Failed"}`)
-          .join(" -> ");
-        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`;
+          .map((t) => `${t.tool} -> ${t.success ? 'Success' : 'Failed'}`)
+          .join(' -> ')
+        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`
       }
 
-      const extraction = result.output;
+      if (isLiveUpdatesEnabled) {
+        const finalTokenSummary = [
+          totalUsage.inputTokens != null ? `in=${totalUsage.inputTokens}` : null,
+          totalUsage.outputTokens != null ? `out=${totalUsage.outputTokens}` : null,
+          reasoningTokens != null ? `reasoning=${reasoningTokens}` : null,
+          totalUsage.totalTokens != null ? `total=${totalUsage.totalTokens}` : null,
+          audit.throughputTokensPerSecond != null ? `${audit.throughputTokensPerSecond} tok/s` : null,
+        ].filter(Boolean).join(', ')
+
+        processingEventBus.emitLog({
+          sourceUrl,
+          headline,
+          stage: 'ai_processing',
+          message: `Stream complete [${finalTokenSummary}] in ${audit.totalLatencyMs}ms (${steps.length} steps)`,
+          status: 'success',
+          streamId: articleStreamId,
+          metadata: {
+            inputTokens: totalUsage.inputTokens,
+            outputTokens: totalUsage.outputTokens,
+            reasoningTokens,
+            totalTokens: totalUsage.totalTokens,
+            throughputTokensPerSecond: audit.throughputTokensPerSecond,
+            latencyMs: audit.totalLatencyMs,
+            providerMetadata: providerMetadataResult,
+          },
+        })
+      }
 
       logger.info(
         {
@@ -168,20 +350,30 @@ export class AgentService {
           extractionAttempts: audit.extractionAttempts,
           totalLatencyMs: audit.totalLatencyMs,
           tokensUsed: audit.tokensUsed,
+          throughputTokensPerSecond: audit.throughputTokensPerSecond,
+          reasoningTokens,
           category: extraction.category,
           city: extraction.city,
           state: extraction.state,
         },
-        "AI agent successfully processed article",
-      );
+        'AI agent successfully processed article',
+      )
 
-      return {
-        extraction,
-        audit,
-      };
+      return { extraction, audit }
     } catch (error) {
-      audit.totalLatencyMs = Date.now() - startedAt;
-      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`;
+      audit.totalLatencyMs = Date.now() - startedAt
+      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`
+
+      if (isLiveUpdatesEnabled) {
+        processingEventBus.emitLog({
+          sourceUrl,
+          headline,
+          stage: 'error',
+          message: `AI agent failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          status: 'error',
+          streamId: articleStreamId,
+        })
+      }
 
       logger.error(
         {
@@ -190,12 +382,12 @@ export class AgentService {
           decisionPath: audit.decisionPath,
           totalLatencyMs: audit.totalLatencyMs,
         },
-        "AI agent processing failed",
-      );
+        'AI agent processing failed',
+      )
 
-      return null;
+      return null
     }
   }
 }
 
-export const agentService = new AgentService();
+export const agentService = new AgentService()

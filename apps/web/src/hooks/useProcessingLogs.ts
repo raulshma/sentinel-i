@@ -9,6 +9,7 @@ export type ProcessingStage =
   | 'content_parse'
   | 'ai_processing'
   | 'ai_tool_call'
+  | 'ai_reasoning'
   | 'geocoding'
   | 'fact_check'
   | 'storage'
@@ -25,12 +26,30 @@ export interface ProcessingLogEntry {
   message: string
   status: ProcessingStatus
   metadata?: Record<string, unknown>
+  streamId?: string
+  isStreaming?: boolean
   createdAt: string
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const SOCKET_BASE_URL = import.meta.env.VITE_SOCKET_URL
 const MAX_LOG_ENTRIES = 500
+
+function mergeStreamingEntry(
+  prev: ProcessingLogEntry[],
+  entry: ProcessingLogEntry,
+): ProcessingLogEntry[] {
+  if (entry.streamId) {
+    const idx = prev.findLastIndex((e) => e.streamId === entry.streamId && e.isStreaming)
+    if (idx !== -1) {
+      const updated = prev.slice()
+      updated[idx] = entry
+      return updated
+    }
+  }
+
+  return [...prev.slice(-(MAX_LOG_ENTRIES - 1)), entry]
+}
 
 export const useProcessingLogs = () => {
   const [logs, setLogs] = useState<ProcessingLogEntry[]>([])
@@ -98,7 +117,7 @@ export const useProcessingLogs = () => {
 
     socket.on('processing:log', (entry: ProcessingLogEntry) => {
       setIsEnabled(true)
-      setLogs((prev) => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), entry])
+      setLogs((prev) => mergeStreamingEntry(prev, entry))
     })
 
     return () => {
