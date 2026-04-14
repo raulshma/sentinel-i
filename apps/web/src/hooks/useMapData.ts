@@ -16,6 +16,11 @@ type IncomingSocketItem = NationalItem & {
   latitude: number | null
   longitude: number | null
   isNational: boolean
+  summary?: string
+  sourceUrl?: string
+  city?: string | null
+  state?: string | null
+  publishedAt?: string
 }
 
 export const useMapData = (hours = 24, categories?: string[]) => {
@@ -27,11 +32,14 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   const abortRef = useRef<AbortController | null>(null)
   const hoursRef = useRef(hours)
   const categoriesRef = useRef(categories)
+  const lastBoundsRef = useRef<ViewportBounds | null>(null)
 
   hoursRef.current = hours
   categoriesRef.current = categories
 
   const fetchViewport = useCallback(async (bounds: ViewportBounds) => {
+    lastBoundsRef.current = bounds
+
     if (abortRef.current) {
       abortRef.current.abort()
     }
@@ -98,6 +106,12 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   )
 
   useEffect(() => {
+    if (lastBoundsRef.current) {
+      void fetchViewport(lastBoundsRef.current)
+    }
+  }, [hours, categories, fetchViewport])
+
+  useEffect(() => {
     const socket = io(SOCKET_BASE_URL ?? window.location.origin, {
       path: '/socket.io',
       transports: ['websocket', 'polling'],
@@ -124,6 +138,11 @@ export const useMapData = (hours = 24, categories?: string[]) => {
             longitude: item.longitude!,
             category: item.category,
             headline: item.headline,
+            summary: item.summary ?? '',
+            sourceUrl: item.sourceUrl ?? '',
+            city: item.city ?? null,
+            state: item.state ?? null,
+            publishedAt: item.publishedAt ?? new Date().toISOString(),
             isCluster: false as const,
           },
           ...prev,

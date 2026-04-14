@@ -1,11 +1,13 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
-import { FeatureDetail } from './components/FeatureDetail'
+import { FilterPanel } from './components/FilterPanel'
 import { MapComponent } from './components/MapComponent'
+import { NewsCarousel } from './components/NewsCarousel'
 import { NationalPanel } from './components/NationalPanel'
+import { useDeepLink } from './hooks/useDeepLink'
 import { useMapData } from './hooks/useMapData'
 import { useRealtimeStats } from './hooks/useRealtimeStats'
-import { CATEGORY_COLORS, type MapFeature } from './types/map'
+import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from './types/map'
 
 const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
   { label: 'Politics', color: CATEGORY_COLORS.Politics },
@@ -20,16 +22,77 @@ const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
 
 function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats()
-  const { features, nationalItems, isLoading, debouncedFetchViewport } = useMapData()
+  const { initialState, pushState } = useDeepLink()
+
+  const [selectedCategories, setSelectedCategories] = useState<NewsCategory[]>(
+    initialState.categories,
+  )
+  const [hours, setHours] = useState(initialState.hours)
+  const [showFilters, setShowFilters] = useState(false)
   const [selectedFeature, setSelectedFeature] = useState<MapFeature | null>(null)
   const [showNational, setShowNational] = useState(false)
+
+  const { features, nationalItems, isLoading, debouncedFetchViewport } = useMapData(
+    hours,
+    selectedCategories.length > 0 ? selectedCategories : undefined,
+  )
 
   const handleFeatureClick = useCallback((feature: MapFeature) => {
     setSelectedFeature(feature)
   }, [])
 
-  const handleCloseDetail = useCallback(() => {
+  const handleCloseCarousel = useCallback(() => {
     setSelectedFeature(null)
+  }, [])
+
+  const handleViewportChange = useCallback(
+    (bounds: { minLng: number; minLat: number; maxLng: number; maxLat: number; zoom: number }) => {
+      debouncedFetchViewport(bounds)
+
+      pushState({
+        center: [(bounds.minLng + bounds.maxLng) / 2, (bounds.minLat + bounds.maxLat) / 2],
+        zoom: bounds.zoom,
+        categories: selectedCategories,
+        hours,
+      })
+    },
+    [debouncedFetchViewport, pushState, selectedCategories, hours],
+  )
+
+  const handleCategoriesChange = useCallback(
+    (categories: NewsCategory[]) => {
+      setSelectedCategories(categories)
+      pushState({
+        center: initialState.center,
+        zoom: initialState.zoom,
+        categories,
+        hours,
+      })
+    },
+    [initialState.center, initialState.zoom, hours, pushState],
+  )
+
+  const handleHoursChange = useCallback(
+    (newHours: number) => {
+      setHours(newHours)
+      pushState({
+        center: initialState.center,
+        zoom: initialState.zoom,
+        categories: selectedCategories,
+        hours: newHours,
+      })
+    },
+    [initialState.center, initialState.zoom, selectedCategories, pushState],
+  )
+
+  useEffect(() => {
+    pushState({
+      center: initialState.center,
+      zoom: initialState.zoom,
+      categories: selectedCategories,
+      hours,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
@@ -61,8 +124,19 @@ function App() {
         <MapComponent
           features={features}
           isLoading={isLoading}
-          onViewportChange={debouncedFetchViewport}
+          onViewportChange={handleViewportChange}
           onFeatureClick={handleFeatureClick}
+          initialCenter={initialState.center}
+          initialZoom={initialState.zoom}
+        />
+
+        <FilterPanel
+          selectedCategories={selectedCategories}
+          hours={hours}
+          onCategoriesChange={handleCategoriesChange}
+          onHoursChange={handleHoursChange}
+          isOpen={showFilters}
+          onToggle={() => setShowFilters((prev) => !prev)}
         />
 
         <NationalPanel
@@ -71,23 +145,32 @@ function App() {
           onToggle={() => setShowNational((prev) => !prev)}
         />
 
-        <FeatureDetail
+        <NewsCarousel
           feature={selectedFeature}
-          onClose={handleCloseDetail}
+          onClose={handleCloseCarousel}
         />
       </div>
 
       <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5">
         <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          {CATEGORY_ENTRIES.map(({ label, color }) => (
-            <li key={label} className="flex items-center gap-1.5">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: color }}
-              />
-              <span className="text-[11px] text-slate-300">{label}</span>
-            </li>
-          ))}
+          {CATEGORY_ENTRIES.map(({ label, color }) => {
+            const isActive =
+              selectedCategories.length === 0 || selectedCategories.includes(label as NewsCategory)
+            return (
+              <li
+                key={label}
+                className={`flex items-center gap-1.5 transition-opacity ${
+                  isActive ? 'opacity-100' : 'opacity-30'
+                }`}
+              >
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: color }}
+                />
+                <span className="text-[11px] text-slate-300">{label}</span>
+              </li>
+            )
+          })}
           <li className="ml-auto text-[10px] text-slate-500">
             {features.length} markers · {nationalItems.length} national
           </li>

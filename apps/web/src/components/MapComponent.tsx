@@ -33,6 +33,8 @@ interface MapComponentProps {
     zoom: number
   }) => void
   onFeatureClick?: (feature: MapFeature) => void
+  initialCenter?: [number, number]
+  initialZoom?: number
 }
 
 export function MapComponent({
@@ -40,7 +42,12 @@ export function MapComponent({
   isLoading,
   onViewportChange,
   onFeatureClick,
+  initialCenter,
+  initialZoom,
 }: MapComponentProps) {
+  const mapCenter = initialCenter ?? INDIA_CENTER
+  const mapZoom = initialZoom ?? DEFAULT_ZOOM
+
   const [selectedPoint, setSelectedPoint] = useState<{
     coordinates: [number, number]
     properties: NewsProperties
@@ -92,6 +99,11 @@ export function MapComponent({
         longitude: coordinates[0],
         category: feature.properties.category as NewsCategory,
         headline: feature.properties.headline,
+        summary: '',
+        sourceUrl: '',
+        city: null,
+        state: null,
+        publishedAt: new Date().toISOString(),
         isCluster: false,
       }
 
@@ -120,8 +132,8 @@ export function MapComponent({
   return (
     <div className="relative h-full w-full">
       <Map
-        center={INDIA_CENTER}
-        zoom={DEFAULT_ZOOM}
+        center={mapCenter}
+        zoom={mapZoom}
         minZoom={3}
         maxZoom={16}
         theme="dark"

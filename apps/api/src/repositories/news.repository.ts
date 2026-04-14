@@ -180,6 +180,29 @@ const NATIONAL_ITEMS_SQL = `
   LIMIT 100;
 `
 
+const CLUSTER_ARTICLES_SQL = `
+  SELECT
+    id,
+    headline,
+    summary,
+    source_url,
+    location_name,
+    city,
+    state,
+    category,
+    ST_Y(geom::geometry)::double precision AS latitude,
+    ST_X(geom::geometry)::double precision AS longitude,
+    is_national,
+    published_at
+  FROM news_items
+  WHERE published_at >= NOW() - make_interval(hours => $5::int)
+    AND is_national = FALSE
+    AND geom IS NOT NULL
+    AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3::double precision)
+  ORDER BY published_at DESC
+  LIMIT $4::int;
+`
+
 const normalizeCategory = (
   category: string,
   isNational: boolean,
@@ -352,6 +375,11 @@ export class NewsRepository {
               longitude: row.longitude,
               category: validCategories[0] ?? 'General',
               headline: '',
+              summary: '',
+              sourceUrl: '',
+              city: null,
+              state: null,
+              publishedAt: new Date().toISOString(),
               isCluster: false,
             } satisfies MapMarker)
           } else {
@@ -381,6 +409,11 @@ export class NewsRepository {
             longitude: Number(row.longitude),
             category: normalizeCategory(row.category, row.is_national),
             headline: row.headline,
+            summary: row.summary,
+            sourceUrl: row.source_url,
+            city: row.city,
+            state: row.state,
+            publishedAt: row.published_at.toISOString(),
             isCluster: false,
           } satisfies MapMarker)
         }
@@ -420,6 +453,29 @@ export class NewsRepository {
     }
 
     return { features, nationalItems }
+  }
+
+  async findClusterArticles(
+    longitude: number,
+    latitude: number,
+    radiusMeters: number,
+    limit: number,
+    hours: number,
+  ): Promise<NewsItem[]> {
+    try {
+      const result = await getPgPool().query<NewsRow>(CLUSTER_ARTICLES_SQL, [
+        longitude,
+        latitude,
+        radiusMeters,
+        limit,
+        hours,
+      ])
+
+      return result.rows.map(mapRowToNewsItem)
+    } catch (error) {
+      logger.warn({ error }, 'Cluster articles query failed')
+      return []
+    }
   }
 }
 

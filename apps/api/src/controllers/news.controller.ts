@@ -50,6 +50,14 @@ const parseCategories = (raw: string | undefined): NewsCategory[] | undefined =>
   return categories && categories.length > 0 ? categories : undefined
 }
 
+const clusterArticlesSchema = z.object({
+  longitude: z.coerce.number().min(-180).max(180),
+  latitude: z.coerce.number().min(-90).max(90),
+  radius: z.coerce.number().min(100).max(50000).default(5000),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  hours: z.coerce.number().int().min(1).max(72).default(24),
+})
+
 export class NewsController {
   constructor(private readonly service: NewsService) {}
 
@@ -135,5 +143,36 @@ export class NewsController {
     res.json({
       data: this.service.getRealtimeStats(),
     })
+  }
+
+  getClusterArticles = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    const parsed = clusterArticlesSchema.safeParse(req.query)
+
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'Invalid cluster articles query',
+        details: parsed.error.flatten(),
+      })
+      return
+    }
+
+    try {
+      const articles = await this.service.getClusterArticles(
+        parsed.data.longitude,
+        parsed.data.latitude,
+        parsed.data.radius,
+        parsed.data.limit,
+        parsed.data.hours,
+      )
+
+      res.json({ data: articles })
+    } catch (error) {
+      logger.error({ error }, 'Failed to fetch cluster articles')
+      next(error)
+    }
   }
 }

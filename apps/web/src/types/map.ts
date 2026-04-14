@@ -15,6 +15,11 @@ export interface MapMarker {
   longitude: number
   category: NewsCategory
   headline: string
+  summary: string
+  sourceUrl: string
+  city: string | null
+  state: string | null
+  publishedAt: string
   isCluster: false
 }
 
