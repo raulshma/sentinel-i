@@ -1,11 +1,14 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { CreditCard } from 'lucide-react'
 
 import { FilterPanel } from './components/FilterPanel'
 import { TerminalPanel } from './components/TerminalPanel'
+import { UsageFlyout } from './components/UsageFlyout'
 import { useDeepLink } from './hooks/useDeepLink'
 import { useMapData } from './hooks/useMapData'
 import { useProcessingLogs } from './hooks/useProcessingLogs'
 import { useRealtimeStats } from './hooks/useRealtimeStats'
+import { useUsageLimits } from './hooks/useUsageLimits'
 import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from './types/map'
 
 const MapComponent = lazy(() =>
@@ -33,6 +36,7 @@ function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats()
   const { initialState, pushState } = useDeepLink()
   const { logs, isEnabled: isDevToolsEnabled, isConnected: isTerminalConnected, nextSyncAt, isSyncing, triggerSync } = useProcessingLogs()
+  const usage = useUsageLimits()
 
   const [selectedCategories, setSelectedCategories] = useState<NewsCategory[]>(
     initialState.categories,
@@ -42,6 +46,7 @@ function App() {
   const [selectedFeature, setSelectedFeature] = useState<MapFeature | null>(null)
   const [showNational, setShowNational] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
+  const [showUsage, setShowUsage] = useState(false)
 
   const { features, nationalItems, isLoading, debouncedFetchViewport } = useMapData(
     hours,
@@ -211,7 +216,27 @@ function App() {
           <li className="ml-auto text-[10px] text-slate-500" aria-live="polite">
             {features.length} markers · {nationalItems.length} national
           </li>
-          <li className="relative">
+          <li className="relative flex items-center gap-2">
+            {isDevToolsEnabled && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUsage((prev) => !prev)
+                  if (!showUsage) {
+                    usage.fetchUsage()
+                    usage.startPolling()
+                  } else {
+                    usage.stopPolling()
+                  }
+                }}
+                aria-label={showUsage ? 'Close usage panel' : 'Open usage panel'}
+                aria-expanded={showUsage}
+                className="glass-panel flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
+              >
+                <CreditCard size={13} aria-hidden="true" />
+                <span className="hidden sm:inline">Usage</span>
+              </button>
+            )}
             <TerminalPanel
               logs={logs}
               isEnabled={isDevToolsEnabled}
@@ -225,6 +250,20 @@ function App() {
           </li>
         </ul>
       </footer>
+
+      {isDevToolsEnabled && (
+        <UsageFlyout
+          isOpen={showUsage}
+          onClose={() => {
+            setShowUsage(false)
+            usage.stopPolling()
+          }}
+          data={usage.data}
+          isLoading={usage.isLoading}
+          error={usage.error}
+          onRefresh={usage.fetchUsage}
+        />
+      )}
     </main>
   )
 }

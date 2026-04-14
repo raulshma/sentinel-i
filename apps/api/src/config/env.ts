@@ -1,7 +1,15 @@
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { config } from 'dotenv'
 import { z } from 'zod'
 
-config()
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), '../../.env'),
+]
+
+const envPath = envPaths.find((p) => existsSync(p))
+config(envPath ? { path: envPath } : undefined)
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
