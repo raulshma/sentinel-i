@@ -9,7 +9,7 @@ import { rssFeedSources } from "../config/rssFeeds.js";
 import { logger } from "../config/logger.js";
 import {
   newsRepository,
-  type NewsRepository,
+  NewsRepository,
 } from "../repositories/news.repository.js";
 import { socketGateway } from "../socket/socketGateway.js";
 import type { NewsCategory, CreateLocationInput } from "../types/news.js";
@@ -1428,6 +1428,8 @@ export class RssIngestionService {
     const itemStartedAtMs = Date.now();
     const dedupeStartedAtMs = Date.now();
 
+    const contentHash = NewsRepository.computeContentHash(headline, sourceUrl);
+
     this.log(
       sourceUrl,
       headline,
@@ -1437,6 +1439,41 @@ export class RssIngestionService {
       undefined,
       { ...traceContext, eventType: "start" },
     );
+
+    if (await this.repository.existsByContentHash(contentHash)) {
+      summary.duplicateCount += 1;
+
+      const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        headline,
+        "deduplication",
+        "Skipped: content hash match in database",
+        "warn",
+        {
+          reason: "content_hash",
+          failureType: "dedupe_content_hash",
+        },
+        { ...traceContext, eventType: "end", durationMs: dedupeDurationMs },
+      );
+
+      await this.repository.recordIngestionRun({
+        runId: executionContext.runId,
+        jobId: executionContext.jobId,
+        traceId,
+        feedUrl,
+        sourceUrl,
+        headline,
+        step: "deduplication",
+        decisionPath: "Dedupe_Content_Hash",
+        status: "SKIPPED_DUPLICATE",
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      });
+
+      return;
+    }
 
     if (await cacheService.isDuplicate(sourceUrl)) {
       summary.duplicateCount += 1;
@@ -1587,6 +1624,7 @@ export class RssIngestionService {
           fingerprint,
           item,
           traceContext,
+          contentHash,
         );
         return;
       }
@@ -1616,6 +1654,7 @@ export class RssIngestionService {
         fingerprint,
         item,
         traceContext,
+        contentHash,
       );
     } catch (error) {
       summary.errorCount += 1;
@@ -1666,6 +1705,7 @@ export class RssIngestionService {
     fingerprint: HeadlineFingerprint,
     item: RssItem,
     traceContext: ProcessingTraceContext,
+    contentHash: string,
   ): Promise<void> {
     const normalizedLocations = this.normalizeExtractedLocations(
       extraction.locations,
@@ -1746,6 +1786,7 @@ export class RssIngestionService {
       isNational,
       publishedAt: resolvePublishedAt(item),
       locations,
+      contentHash,
     });
 
     if (!result) {
@@ -1856,6 +1897,7 @@ export class RssIngestionService {
     fingerprint: HeadlineFingerprint,
     item: RssItem,
     traceContext: ProcessingTraceContext,
+    contentHash: string,
   ): Promise<void> {
     let fetchResult: FetchArticleContentOutput = {
       content: rawSummary,
@@ -1962,6 +2004,7 @@ export class RssIngestionService {
       isNational,
       publishedAt: resolvePublishedAt(item),
       locations,
+      contentHash,
     });
 
     if (!result) {

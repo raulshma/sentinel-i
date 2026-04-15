@@ -59,6 +59,7 @@ export interface CreateNewsItemInput {
   isNational: boolean;
   publishedAt: string;
   locations: CreateLocationInput[];
+  contentHash?: string;
 }
 
 export interface CreateNewsItemResult {

@@ -8,6 +8,7 @@ import {
   text,
   timestamp,
   uuid,
+  varchar,
 } from "drizzle-orm/pg-core";
 
 export const newsItems = pgTable(
@@ -23,8 +24,12 @@ export const newsItems = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    contentHash: varchar("content_hash", { length: 64 }),
   },
-  (table) => [index("idx_news_items_published_at").on(table.publishedAt)],
+  (table) => [
+    index("idx_news_items_published_at").on(table.publishedAt),
+    index("idx_news_items_content_hash").on(table.contentHash),
+  ],
 );
 
 export const newsItemLocations = pgTable(

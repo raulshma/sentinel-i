@@ -1,5 +1,7 @@
 import { eq, sql, and, desc, gte } from "drizzle-orm";
 
+import { createHash } from "node:crypto";
+
 import { getDb } from "../config/db.js";
 import { logger } from "../config/logger.js";
 import { newsItems, newsItemLocations, ingestionRuns } from "../db/schema.js";
@@ -34,6 +36,29 @@ const normalizeCategory = (
 };
 
 export class NewsRepository {
+  static computeContentHash(headline: string, sourceUrl: string): string {
+    const normalized = `${headline.toLowerCase().trim()}|${sourceUrl.trim()}`;
+    return createHash("sha256").update(normalized).digest("hex");
+  }
+
+  async existsByContentHash(contentHash: string): Promise<boolean> {
+    try {
+      const result = await getDb()
+        .select({ id: newsItems.id })
+        .from(newsItems)
+        .where(eq(newsItems.contentHash, contentHash))
+        .limit(1);
+
+      return result.length > 0;
+    } catch (error) {
+      logger.warn(
+        { error, contentHash },
+        "Content hash lookup failed; assuming not duplicate",
+      );
+      return false;
+    }
+  }
+
   async findByViewport(viewport: ViewportQuery): Promise<MapMarker[]> {
     try {
       const result = await getDb().execute(sql`
@@ -152,6 +177,7 @@ export class NewsRepository {
             category: input.category,
             isNational: input.isNational,
             publishedAt: new Date(input.publishedAt),
+            contentHash: input.contentHash,
           })
           .onConflictDoNothing()
           .returning();

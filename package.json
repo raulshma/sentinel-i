@@ -4,9 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "concurrently -k -n web,api -c blue,green \"npm run dev:web\" \"npm run dev:api\"",
+    "dev": "concurrently -k -n web,api,studio -c blue,green,magenta \"npm run dev:web\" \"npm run dev:api\" \"npm run dev:studio\"",
     "dev:web": "npm run dev --workspace=apps/web",
     "dev:api": "npm run dev --workspace=apps/api",
+    "dev:studio": "npm run db:studio --workspace=apps/api",
     "build": "npm run build --workspaces",
     "lint": "npm run lint --workspaces",
     "format:api": "npm run format --workspace=apps/api"
