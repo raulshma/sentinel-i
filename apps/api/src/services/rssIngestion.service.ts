@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import Parser from "rss-parser";
 
@@ -40,6 +41,12 @@ type RssFeed = {
 interface HeadlineFingerprint {
   normalized: string;
   tokens: Set<string>;
+}
+
+interface NormalizedExtractedLocation {
+  locationName: string | null;
+  city: string | null;
+  state: string | null;
 }
 
 export interface RssIngestionSummary {
@@ -211,6 +218,630 @@ const createFingerprint = (headline: string): HeadlineFingerprint => {
   };
 };
 
+const normalizeLocationKey = (value: string): string => {
+  return normalizeHeadline(value.replace(/&/g, " and "));
+};
+
+interface StateLexiconEntry {
+  state: string;
+  aliases?: string[];
+}
+
+interface CityLexiconEntry {
+  city: string;
+  state: string;
+  aliases?: string[];
+}
+
+interface IndiaLocationLexicon {
+  states: StateLexiconEntry[];
+  cities: CityLexiconEntry[];
+}
+
+interface CanonicalCityState {
+  city: string;
+  state: string;
+}
+
+type AliasMatchCandidate =
+  | {
+      kind: "city";
+      aliasKey: string;
+      aliasTokens: string[];
+      wordCount: number;
+      city: string;
+      state: string;
+      priority: number;
+    }
+  | {
+      kind: "state";
+      aliasKey: string;
+      aliasTokens: string[];
+      wordCount: number;
+      state: string;
+      priority: number;
+    };
+
+const sanitizeAliasList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => normalizeText(entry))
+    .filter((entry) => entry.length > 0);
+};
+
+const loadIndiaLocationLexicon = (): IndiaLocationLexicon => {
+  const lexiconFileUrl = new URL(
+    "../data/india-location-lexicon.json",
+    import.meta.url,
+  );
+
+  try {
+    const raw = readFileSync(lexiconFileUrl, "utf8");
+    const parsed = JSON.parse(raw) as {
+      states?: unknown;
+      cities?: unknown;
+    };
+
+    const states = Array.isArray(parsed.states)
+      ? parsed.states.flatMap((entry): StateLexiconEntry[] => {
+          if (!entry || typeof entry !== "object") {
+            return [];
+          }
+
+          const state = normalizeText(
+            (entry as { state?: unknown }).state?.toString() ?? "",
+          );
+
+          if (state.length === 0) {
+            return [];
+          }
+
+          const aliases = sanitizeAliasList(
+            (entry as { aliases?: unknown }).aliases,
+          );
+
+          return [{ state, ...(aliases.length > 0 ? { aliases } : {}) }];
+        })
+      : [];
+
+    const cities = Array.isArray(parsed.cities)
+      ? parsed.cities.flatMap((entry): CityLexiconEntry[] => {
+          if (!entry || typeof entry !== "object") {
+            return [];
+          }
+
+          const city = normalizeText(
+            (entry as { city?: unknown }).city?.toString() ?? "",
+          );
+          const state = normalizeText(
+            (entry as { state?: unknown }).state?.toString() ?? "",
+          );
+
+          if (city.length === 0 || state.length === 0) {
+            return [];
+          }
+
+          const aliases = sanitizeAliasList(
+            (entry as { aliases?: unknown }).aliases,
+          );
+
+          return [{ city, state, ...(aliases.length > 0 ? { aliases } : {}) }];
+        })
+      : [];
+
+    if (states.length === 0 || cities.length === 0) {
+      throw new Error("Lexicon JSON is missing required states/cities entries");
+    }
+
+    return { states, cities };
+  } catch (error) {
+    logger.error(
+      {
+        error,
+        lexiconFile: lexiconFileUrl.pathname,
+      },
+      "Failed to load India location lexicon",
+    );
+
+    throw error;
+  }
+};
+
+const INDIA_LOCATION_LEXICON = loadIndiaLocationLexicon();
+
+const LOCATION_SIGNAL_IGNORE_LIST = new Set([
+  "india",
+  "indian",
+  "bharat",
+  "nationwide",
+  "national",
+  "countrywide",
+  "country",
+  "global",
+  "world",
+  "international",
+  "overseas",
+  "unknown",
+  "none",
+  "null",
+  "na",
+  "n a",
+]);
+
+const LOCAL_CITIES_CSV_FILE_URL = new URL(
+  "../data/india-cities.csv",
+  import.meta.url,
+);
+
+const STATE_ALIAS_TO_CANONICAL = new Map<string, string>();
+
+const CITY_ALIAS_TO_CANONICAL = new Map<string, CanonicalCityState[]>();
+const MATCHES_BY_FIRST_TOKEN = new Map<string, AliasMatchCandidate[]>();
+const REGISTERED_MATCH_KEYS = new Set<string>();
+
+const registerAliasMatch = (candidate: AliasMatchCandidate): void => {
+  const firstToken = candidate.aliasTokens[0];
+
+  if (!firstToken) {
+    return;
+  }
+
+  const uniquenessKey =
+    candidate.kind === "city"
+      ? `${candidate.kind}|${candidate.aliasKey}|${candidate.city}|${candidate.state}`
+      : `${candidate.kind}|${candidate.aliasKey}|${candidate.state}`;
+
+  if (REGISTERED_MATCH_KEYS.has(uniquenessKey)) {
+    return;
+  }
+
+  REGISTERED_MATCH_KEYS.add(uniquenessKey);
+
+  const current = MATCHES_BY_FIRST_TOKEN.get(firstToken);
+
+  if (current) {
+    current.push(candidate);
+    return;
+  }
+
+  MATCHES_BY_FIRST_TOKEN.set(firstToken, [candidate]);
+};
+
+const sortIndexedMatches = (): void => {
+  for (const candidates of MATCHES_BY_FIRST_TOKEN.values()) {
+    candidates.sort((left, right) => {
+      if (right.wordCount !== left.wordCount) {
+        return right.wordCount - left.wordCount;
+      }
+
+      return right.priority - left.priority;
+    });
+  }
+};
+
+const registerStateEntry = (entry: StateLexiconEntry): void => {
+  const state = normalizeText(entry.state);
+
+  if (state.length === 0) {
+    return;
+  }
+
+  const aliases = [state, ...(entry.aliases ?? [])];
+
+  for (const alias of aliases) {
+    const aliasKey = normalizeLocationKey(alias);
+
+    if (!aliasKey) {
+      continue;
+    }
+
+    const aliasTokens = aliasKey.split(" ").filter(Boolean);
+
+    STATE_ALIAS_TO_CANONICAL.set(aliasKey, state);
+    registerAliasMatch({
+      kind: "state",
+      aliasKey,
+      aliasTokens,
+      wordCount: aliasTokens.length,
+      state,
+      priority: 1,
+    });
+  }
+};
+
+const registerCityEntry = (entry: CityLexiconEntry): void => {
+  const city = normalizeText(entry.city);
+  const state = normalizeText(entry.state);
+
+  if (city.length === 0 || state.length === 0) {
+    return;
+  }
+
+  const aliases = [city, ...(entry.aliases ?? [])];
+
+  for (const alias of aliases) {
+    const aliasKey = normalizeLocationKey(alias);
+
+    if (!aliasKey) {
+      continue;
+    }
+
+    const canonical = { city, state };
+    const current = CITY_ALIAS_TO_CANONICAL.get(aliasKey);
+
+    if (current) {
+      if (
+        !current.some(
+          (candidate) =>
+            candidate.city === canonical.city &&
+            candidate.state === canonical.state,
+        )
+      ) {
+        current.push(canonical);
+      }
+    } else {
+      CITY_ALIAS_TO_CANONICAL.set(aliasKey, [canonical]);
+    }
+
+    const aliasTokens = aliasKey.split(" ").filter(Boolean);
+
+    registerAliasMatch({
+      kind: "city",
+      aliasKey,
+      aliasTokens,
+      wordCount: aliasTokens.length,
+      city,
+      state,
+      priority: 2,
+    });
+  }
+};
+
+for (const entry of INDIA_LOCATION_LEXICON.states) {
+  registerStateEntry(entry);
+}
+
+for (const entry of INDIA_LOCATION_LEXICON.cities) {
+  registerCityEntry(entry);
+}
+
+sortIndexedMatches();
+
+const matchAliasCandidatesInText = (value: string): AliasMatchCandidate[] => {
+  const normalized = normalizeLocationKey(value);
+
+  if (!normalized) {
+    return [];
+  }
+
+  const tokens = normalized.split(" ").filter(Boolean);
+
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  const matches: AliasMatchCandidate[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+
+    if (!token) {
+      continue;
+    }
+
+    const candidates = MATCHES_BY_FIRST_TOKEN.get(token);
+
+    if (!candidates) {
+      continue;
+    }
+
+    let selected: AliasMatchCandidate | null = null;
+
+    for (const candidate of candidates) {
+      if (index + candidate.wordCount > tokens.length) {
+        continue;
+      }
+
+      let isMatch = true;
+
+      for (let offset = 0; offset < candidate.wordCount; offset += 1) {
+        if (tokens[index + offset] !== candidate.aliasTokens[offset]) {
+          isMatch = false;
+          break;
+        }
+      }
+
+      if (isMatch) {
+        selected = candidate;
+        break;
+      }
+    }
+
+    if (!selected) {
+      continue;
+    }
+
+    matches.push(selected);
+    index += selected.wordCount - 1;
+  }
+
+  return matches;
+};
+
+const resolveCanonicalCityCandidate = (
+  cityKey: string,
+  preferredState: string | null,
+): CanonicalCityState | null => {
+  const candidates = CITY_ALIAS_TO_CANONICAL.get(cityKey);
+
+  if (!candidates || candidates.length === 0) {
+    return null;
+  }
+
+  if (preferredState) {
+    const preferredStateKey = normalizeLocationKey(preferredState);
+
+    const stateAligned = candidates.find(
+      (candidate) =>
+        normalizeLocationKey(candidate.state) === preferredStateKey,
+    );
+
+    if (stateAligned) {
+      return stateAligned;
+    }
+  }
+
+  return candidates[0] ?? null;
+};
+
+const normalizeLocationField = (
+  value: string | null | undefined,
+): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const cleaned = normalizeText(value);
+  return cleaned.length > 0 ? cleaned : null;
+};
+
+const toTitleCase = (value: string): string => {
+  return value
+    .toLowerCase()
+    .split(" ")
+    .filter(Boolean)
+    .map((word, index) => {
+      if (index > 0 && (word === "and" || word === "of")) {
+        return word;
+      }
+
+      return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+    })
+    .join(" ");
+};
+
+const isIgnorableLocationSignal = (value: string): boolean => {
+  return LOCATION_SIGNAL_IGNORE_LIST.has(normalizeLocationKey(value));
+};
+
+const canonicalizeState = (value: string | null): string | null => {
+  if (!value || isIgnorableLocationSignal(value)) {
+    return null;
+  }
+
+  const key = normalizeLocationKey(value);
+  const canonical = STATE_ALIAS_TO_CANONICAL.get(key);
+
+  if (canonical) {
+    return canonical;
+  }
+
+  return toTitleCase(value);
+};
+
+const canonicalizeCity = (
+  value: string | null,
+  preferredState: string | null = null,
+): string | null => {
+  if (!value || isIgnorableLocationSignal(value)) {
+    return null;
+  }
+
+  const key = normalizeLocationKey(value);
+  const canonical = resolveCanonicalCityCandidate(key, preferredState);
+
+  if (canonical) {
+    return canonical.city;
+  }
+
+  return toTitleCase(value);
+};
+
+const parseCsvRows = (csvText: string): string[][] => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  const pushCell = (): void => {
+    row.push(cell.trim());
+    cell = "";
+  };
+
+  const pushRow = (): void => {
+    const hasContent = row.some((column) => column.length > 0);
+
+    if (hasContent) {
+      rows.push(row);
+    }
+
+    row = [];
+  };
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const character = csvText[index];
+
+    if (character === '"') {
+      const nextCharacter = csvText[index + 1];
+
+      if (inQuotes && nextCharacter === '"') {
+        cell += '"';
+        index += 1;
+        continue;
+      }
+
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === "," && !inQuotes) {
+      pushCell();
+      continue;
+    }
+
+    if ((character === "\n" || character === "\r") && !inQuotes) {
+      pushCell();
+      pushRow();
+
+      if (character === "\r" && csvText[index + 1] === "\n") {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    cell += character;
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    pushCell();
+    pushRow();
+  }
+
+  return rows;
+};
+
+const parseCitiesCsv = (csvText: string): CityLexiconEntry[] => {
+  const rows = parseCsvRows(csvText);
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const headers = rows[0]?.map((header) => normalizeLocationKey(header)) ?? [];
+  const cityIndex = headers.indexOf("city");
+  const stateIndex = headers.indexOf("state");
+
+  if (cityIndex < 0 || stateIndex < 0) {
+    return [];
+  }
+
+  const parsedEntries: CityLexiconEntry[] = [];
+  const seen = new Set<string>();
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+
+    if (!row) {
+      continue;
+    }
+
+    const cityRaw = normalizeText(row[cityIndex] ?? "");
+    const stateRaw = normalizeText(row[stateIndex] ?? "");
+
+    if (cityRaw.length < 2 || stateRaw.length < 2) {
+      continue;
+    }
+
+    if (isIgnorableLocationSignal(cityRaw)) {
+      continue;
+    }
+
+    const city = toTitleCase(cityRaw);
+    const state = canonicalizeState(stateRaw) ?? toTitleCase(stateRaw);
+
+    const key = `${normalizeLocationKey(city)}|${normalizeLocationKey(state)}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    parsedEntries.push({ city, state });
+  }
+
+  return parsedEntries;
+};
+
+const loadLocalCitiesCsvLexicon = (): void => {
+  try {
+    const csvText = readFileSync(LOCAL_CITIES_CSV_FILE_URL, "utf8");
+    const localCityEntries = parseCitiesCsv(csvText);
+
+    for (const entry of localCityEntries) {
+      registerCityEntry(entry);
+    }
+
+    sortIndexedMatches();
+
+    logger.info(
+      {
+        cityEntriesMerged: localCityEntries.length,
+        totalAliasCount: CITY_ALIAS_TO_CANONICAL.size,
+        sourceFile: LOCAL_CITIES_CSV_FILE_URL.href,
+      },
+      "Loaded local Indian city lexicon from CSV",
+    );
+  } catch (error) {
+    logger.warn(
+      {
+        error,
+        sourceFile: LOCAL_CITIES_CSV_FILE_URL.href,
+      },
+      "Failed to load local Indian cities CSV; continuing with JSON lexicon",
+    );
+  }
+};
+
+loadLocalCitiesCsvLexicon();
+
+const inferCityAndStateFromLocationName = (
+  locationName: string,
+): { city: string; state: string } | null => {
+  const matches = matchAliasCandidatesInText(locationName);
+
+  for (const match of matches) {
+    if (match.kind === "city") {
+      return {
+        city: match.city,
+        state: match.state,
+      };
+    }
+  }
+
+  return null;
+};
+
+const inferStateFromCanonicalCity = (city: string): string | null => {
+  const key = normalizeLocationKey(city);
+  const canonical = resolveCanonicalCityCandidate(key, null);
+  return canonical?.state ?? null;
+};
+
+const buildLocationIdentityKey = (
+  location: NormalizedExtractedLocation,
+): string => {
+  return [
+    location.locationName ? normalizeLocationKey(location.locationName) : "",
+    location.city ? normalizeLocationKey(location.city) : "",
+    location.state ? normalizeLocationKey(location.state) : "",
+  ].join("|");
+};
+
 const jaccardSimilarity = (left: Set<string>, right: Set<string>): number => {
   if (left.size === 0 || right.size === 0) {
     return 0;
@@ -284,6 +915,202 @@ export class RssIngestionService {
       status,
       metadata,
     });
+  }
+
+  private normalizeExtractedLocations(
+    rawLocations: import("../types/ai.js").NewsExtraction["locations"],
+  ): NormalizedExtractedLocation[] {
+    const normalizedLocations: NormalizedExtractedLocation[] = [];
+    const seen = new Set<string>();
+
+    for (const rawLocation of rawLocations) {
+      let locationName = normalizeLocationField(rawLocation.location_name);
+      let state = canonicalizeState(normalizeLocationField(rawLocation.state));
+      let city = canonicalizeCity(
+        normalizeLocationField(rawLocation.city),
+        state,
+      );
+
+      if (locationName && isIgnorableLocationSignal(locationName)) {
+        locationName = null;
+      }
+
+      if (!city && locationName) {
+        const inferred = inferCityAndStateFromLocationName(locationName);
+
+        if (inferred) {
+          city = inferred.city;
+          state = state ?? inferred.state;
+        }
+      }
+
+      if (!state && city) {
+        state = inferStateFromCanonicalCity(city);
+      }
+
+      if (
+        locationName &&
+        city &&
+        normalizeLocationKey(locationName) === normalizeLocationKey(city)
+      ) {
+        locationName = null;
+      }
+
+      if (
+        locationName &&
+        !city &&
+        state &&
+        normalizeLocationKey(locationName) === normalizeLocationKey(state)
+      ) {
+        locationName = null;
+      }
+
+      if (!locationName && !city && !state) {
+        continue;
+      }
+
+      const normalizedLocation: NormalizedExtractedLocation = {
+        locationName,
+        city,
+        state,
+      };
+
+      const identityKey = buildLocationIdentityKey(normalizedLocation);
+
+      if (seen.has(identityKey)) {
+        continue;
+      }
+
+      seen.add(identityKey);
+      normalizedLocations.push(normalizedLocation);
+    }
+
+    return normalizedLocations;
+  }
+
+  private extractRuleBasedLocationSignals(
+    text: string,
+  ): NormalizedExtractedLocation[] {
+    const matches = matchAliasCandidatesInText(text);
+    const detected: NormalizedExtractedLocation[] = [];
+    const seen = new Set<string>();
+
+    const addSignal = (signal: NormalizedExtractedLocation): void => {
+      const key = buildLocationIdentityKey(signal);
+
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      detected.push(signal);
+    };
+
+    for (const match of matches) {
+      if (match.kind === "city") {
+        addSignal({
+          locationName: null,
+          city: match.city,
+          state: match.state,
+        });
+        continue;
+      }
+
+      addSignal({
+        locationName: null,
+        city: null,
+        state: match.state,
+      });
+    }
+
+    return detected;
+  }
+
+  private async geocodeLocations(
+    sourceUrl: string,
+    headline: string,
+    candidates: NormalizedExtractedLocation[],
+    traceContext: ProcessingTraceContext,
+  ): Promise<{ locations: CreateLocationInput[]; geocodedCount: number }> {
+    const locations: CreateLocationInput[] = [];
+    let geocodedCount = 0;
+    let isPrimary = true;
+
+    for (const candidate of candidates) {
+      let latitude: number | null = null;
+      let longitude: number | null = null;
+      const locationLabel =
+        candidate.locationName ?? candidate.city ?? candidate.state;
+
+      if (locationLabel) {
+        const geocodeStartedAtMs = Date.now();
+
+        this.log(
+          sourceUrl,
+          headline,
+          "geocoding",
+          `Geocoding location: ${locationLabel}`,
+          "start",
+          undefined,
+          { ...traceContext, eventType: "start" },
+        );
+
+        const coordinates = await geocodeService.forwardGeocode({
+          locationName: candidate.locationName ?? locationLabel,
+          city: candidate.city,
+          state: candidate.state,
+        });
+
+        const geocodeDurationMs = Date.now() - geocodeStartedAtMs;
+
+        if (coordinates) {
+          latitude = coordinates.latitude;
+          longitude = coordinates.longitude;
+          geocodedCount += 1;
+
+          this.log(
+            sourceUrl,
+            headline,
+            "geocoding",
+            `Geocoded to ${latitude}, ${longitude}`,
+            "success",
+            { displayName: coordinates.displayName },
+            {
+              ...traceContext,
+              eventType: "end",
+              durationMs: geocodeDurationMs,
+            },
+          );
+        } else {
+          this.log(
+            sourceUrl,
+            headline,
+            "geocoding",
+            `Geocoding returned no coordinates for: ${locationLabel}`,
+            "warn",
+            { failureType: "geocode_not_found" },
+            {
+              ...traceContext,
+              eventType: "end",
+              durationMs: geocodeDurationMs,
+            },
+          );
+        }
+      }
+
+      locations.push({
+        locationName: candidate.locationName,
+        city: candidate.city,
+        state: candidate.state,
+        isPrimary,
+        latitude,
+        longitude,
+      });
+
+      isPrimary = false;
+    }
+
+    return { locations, geocodedCount };
   }
 
   async runIngestionCycle(
@@ -682,83 +1509,58 @@ export class RssIngestionService {
     item: RssItem,
     traceContext: ProcessingTraceContext,
   ): Promise<void> {
-    const locations: CreateLocationInput[] = [];
-    let anyGeocoded = false;
+    const normalizedLocations = this.normalizeExtractedLocations(
+      extraction.locations,
+    );
 
-    let isFirst = true;
-
-    for (const loc of extraction.locations) {
-      let latitude: number | null = null;
-      let longitude: number | null = null;
-
-      if (loc.location_name || loc.city || loc.state) {
-        const geocodeStartedAtMs = Date.now();
-
-        this.log(
-          sourceUrl,
-          extraction.headline,
-          "geocoding",
-          `Geocoding location: ${loc.location_name ?? loc.city ?? loc.state}`,
-          "start",
-          undefined,
-          { ...traceContext, eventType: "start" },
-        );
-
-        const coordinates = await geocodeService.forwardGeocode({
-          locationName: loc.location_name ?? loc.city ?? loc.state ?? "",
-          city: loc.city,
-          state: loc.state,
-        });
-
-        const geocodeDurationMs = Date.now() - geocodeStartedAtMs;
-
-        if (coordinates) {
-          latitude = coordinates.latitude;
-          longitude = coordinates.longitude;
-          anyGeocoded = true;
-          this.log(
-            sourceUrl,
-            extraction.headline,
-            "geocoding",
-            `Geocoded to ${latitude}, ${longitude}`,
-            "success",
-            undefined,
-            {
-              ...traceContext,
-              eventType: "end",
-              durationMs: geocodeDurationMs,
-            },
-          );
-        } else {
-          this.log(
-            sourceUrl,
-            extraction.headline,
-            "geocoding",
-            `Geocoding returned no coordinates for: ${loc.location_name ?? loc.city ?? loc.state}`,
-            "warn",
-            { failureType: "geocode_not_found" },
-            {
-              ...traceContext,
-              eventType: "end",
-              durationMs: geocodeDurationMs,
-            },
-          );
-        }
-      }
-
-      locations.push({
-        locationName: loc.location_name,
-        city: loc.city,
-        state: loc.state,
-        isPrimary: isFirst,
-        latitude,
-        longitude,
-      });
-      isFirst = false;
+    if (normalizedLocations.length !== extraction.locations.length) {
+      this.log(
+        sourceUrl,
+        extraction.headline,
+        "content_parse",
+        `Normalized AI locations: ${normalizedLocations.length}/${extraction.locations.length}`,
+        "info",
+        {
+          extractedLocationCount: extraction.locations.length,
+          normalizedLocationCount: normalizedLocations.length,
+        },
+        {
+          ...traceContext,
+          eventType: "checkpoint",
+        },
+      );
     }
 
-    const hasLocations = extraction.locations.length > 0;
-    const isNational = !hasLocations || !anyGeocoded;
+    const { locations, geocodedCount } = await this.geocodeLocations(
+      sourceUrl,
+      extraction.headline,
+      normalizedLocations,
+      traceContext,
+    );
+
+    const hasLocations = normalizedLocations.length > 0;
+    const isNational = !hasLocations;
+
+    const locationResolutionPath = hasLocations
+      ? geocodedCount > 0
+        ? "Geocode_Resolved"
+        : "Location_Text_Only"
+      : "No_Location_Signal";
+
+    if (hasLocations && geocodedCount === 0) {
+      this.log(
+        sourceUrl,
+        extraction.headline,
+        "geocoding",
+        "Location signals found but geocoding failed for all; storing text-only locations",
+        "warn",
+        {
+          locationCount: normalizedLocations.length,
+          failureType: "geocode_all_failed",
+        },
+        { ...traceContext, eventType: "checkpoint" },
+      );
+    }
 
     const category: NewsCategory = isNational
       ? "Uncategorized / National"
@@ -772,7 +1574,7 @@ export class RssIngestionService {
       sourceUrl,
       extraction.headline,
       "storage",
-      `Storing news item with ${locations.length} location(s) in database`,
+      `Storing news item with ${locations.length} location(s) in database (${geocodedCount} geocoded)`,
       "start",
       undefined,
       { ...traceContext, eventType: "start" },
@@ -811,7 +1613,7 @@ export class RssIngestionService {
         sourceUrl,
         headline: extraction.headline,
         step: "storage",
-        decisionPath: `${agentDecisionPath} -> Insert_Conflict_or_Error`,
+        decisionPath: `${agentDecisionPath} -> ${locationResolutionPath} -> Insert_Conflict_or_Error`,
         status: "SKIPPED_CONFLICT",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
@@ -878,7 +1680,7 @@ export class RssIngestionService {
       headline: extraction.headline,
       newsItemId: result.item.id,
       step: "complete",
-      decisionPath: agentDecisionPath,
+      decisionPath: `${agentDecisionPath} -> ${locationResolutionPath}`,
       status: "SUCCESS",
       startedAt: itemStartedAt,
       finishedAt: new Date(),
@@ -934,6 +1736,52 @@ export class RssIngestionService {
 
     const fullText = normalizeText(`${headline} ${fetchResult.content}`);
     const baseCategory = categorizeArticle(fullText);
+    const ruleBasedLocations = this.extractRuleBasedLocationSignals(fullText);
+
+    this.log(
+      sourceUrl,
+      headline,
+      "content_parse",
+      `Rule-based location signals detected: ${ruleBasedLocations.length}`,
+      ruleBasedLocations.length > 0 ? "info" : "warn",
+      { locationSignalCount: ruleBasedLocations.length },
+      { ...traceContext, eventType: "checkpoint" },
+    );
+
+    const { locations, geocodedCount } = await this.geocodeLocations(
+      sourceUrl,
+      headline,
+      ruleBasedLocations,
+      traceContext,
+    );
+
+    const hasLocations = ruleBasedLocations.length > 0;
+    const isNational = !hasLocations;
+    const locationResolutionPath = hasLocations
+      ? geocodedCount > 0
+        ? "RuleBased_Location_Geocoded"
+        : "RuleBased_Location_TextOnly"
+      : "RuleBased_No_Location_Signal";
+
+    if (hasLocations && geocodedCount === 0) {
+      this.log(
+        sourceUrl,
+        headline,
+        "geocoding",
+        "Rule-based location signals found but geocoding failed for all; storing text-only locations",
+        "warn",
+        {
+          locationCount: ruleBasedLocations.length,
+          failureType: "rule_based_geocode_all_failed",
+        },
+        { ...traceContext, eventType: "checkpoint" },
+      );
+    }
+
+    const category: NewsCategory =
+      isNational && baseCategory === "General"
+        ? "Uncategorized / National"
+        : baseCategory;
 
     const storageStartedAtMs = Date.now();
 
@@ -941,7 +1789,7 @@ export class RssIngestionService {
       sourceUrl,
       headline,
       "storage",
-      "Storing news item as national (rule-based fallback, no AI location extraction)",
+      `Storing ${isNational ? "national" : "regional"} news item from rule-based fallback (${locations.length} location(s), ${geocodedCount} geocoded)`,
       "start",
       undefined,
       { ...traceContext, eventType: "start" },
@@ -952,11 +1800,10 @@ export class RssIngestionService {
       headline,
       summary:
         fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
-      category:
-        baseCategory === "General" ? "Uncategorized / National" : baseCategory,
-      isNational: true,
+      category,
+      isNational,
       publishedAt: resolvePublishedAt(item),
-      locations: [],
+      locations,
     });
 
     if (!result) {
@@ -982,7 +1829,7 @@ export class RssIngestionService {
         sourceUrl,
         headline,
         step: "storage",
-        decisionPath: `${fetchResult.decisionPath} -> Insert_Conflict_or_Error`,
+        decisionPath: `${fetchResult.decisionPath} -> ${locationResolutionPath} -> Insert_Conflict_or_Error`,
         status: "SKIPPED_CONFLICT",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
@@ -993,7 +1840,10 @@ export class RssIngestionService {
 
     summary.inserted += 1;
     summary.locationCount += result.locations.length;
-    summary.nationalCount += 1;
+
+    if (result.item.isNational) {
+      summary.nationalCount += 1;
+    }
 
     const articleTraceContext: ProcessingTraceContext = {
       ...traceContext,
@@ -1004,9 +1854,9 @@ export class RssIngestionService {
       sourceUrl,
       headline,
       "storage",
-      `Stored national news item ${result.item.id}`,
+      `Stored ${result.item.isNational ? "national" : "regional"} news item ${result.item.id}`,
       "success",
-      { locationCount: 0 },
+      { locationCount: result.locations.length },
       {
         ...articleTraceContext,
         eventType: "end",
@@ -1018,12 +1868,12 @@ export class RssIngestionService {
       sourceUrl,
       headline,
       "complete",
-      "Article processed successfully [national] (rule-based fallback)",
+      `Article processed successfully [${result.item.category}]${result.item.isNational ? " (national)" : ""} (rule-based fallback)`,
       "success",
       {
         category: result.item.category,
-        isNational: true,
-        locationCount: 0,
+        isNational: result.item.isNational,
+        locationCount: result.locations.length,
       },
       { ...articleTraceContext, eventType: "end" },
     );
@@ -1041,7 +1891,7 @@ export class RssIngestionService {
       headline,
       newsItemId: result.item.id,
       step: "complete",
-      decisionPath: `RuleBased_Fallback -> ${fetchResult.decisionPath}`,
+      decisionPath: `RuleBased_Fallback -> ${fetchResult.decisionPath} -> ${locationResolutionPath}`,
       status: "SUCCESS",
       startedAt: itemStartedAt,
       finishedAt: new Date(),

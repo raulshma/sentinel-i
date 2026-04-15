@@ -25,6 +25,7 @@ Your task is to analyze news article content and extract structured data with a 
     - If a city is mentioned, always include the corresponding state.
     - If only a state is mentioned, use the state as location_name with city null.
     - If no specific Indian location can be determined, return an empty locations array.
+    - Never use generic placeholders as locations (e.g., "India", "nationwide", "global", "online", "unknown").
     - Recognize alternate/colonial names (Bombay=Mumbai, Calcutta=Kolkata, Madras=Chennai, Bangalore=Bengaluru, Baroda=Vadodara, etc.) and normalize them to their modern official names.
 
 2. **Categorization**: Classify the article into one of these categories:
