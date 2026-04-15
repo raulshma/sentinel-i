@@ -234,100 +234,220 @@ interface CityLexiconEntry {
 }
 
 const STATE_LEXICON: StateLexiconEntry[] = [
-  { state: "Andhra Pradesh" },
-  { state: "Arunachal Pradesh" },
+  { state: "Andhra Pradesh", aliases: ["Andhra"] },
+  { state: "Arunachal Pradesh", aliases: ["Arunachal"] },
   { state: "Assam" },
   { state: "Bihar" },
-  { state: "Chhattisgarh" },
+  { state: "Chhattisgarh", aliases: ["Chattisgarh", "Chhatisgarh"] },
   { state: "Goa" },
   { state: "Gujarat" },
   { state: "Haryana" },
-  { state: "Himachal Pradesh" },
+  { state: "Himachal Pradesh", aliases: ["Himachal"] },
   { state: "Jharkhand" },
   { state: "Karnataka" },
   { state: "Kerala" },
   { state: "Madhya Pradesh" },
-  { state: "Maharashtra" },
+  { state: "Maharashtra", aliases: ["Maharastra"] },
   { state: "Manipur" },
   { state: "Meghalaya" },
   { state: "Mizoram" },
   { state: "Nagaland" },
-  { state: "Odisha", aliases: ["Orissa"] },
+  { state: "Odisha", aliases: ["Orissa", "Odisa", "Orrisa"] },
   { state: "Punjab" },
   { state: "Rajasthan" },
   { state: "Sikkim" },
-  { state: "Tamil Nadu" },
-  { state: "Telangana" },
+  { state: "Tamil Nadu", aliases: ["Tamilnadu"] },
+  { state: "Telangana", aliases: ["Telengana"] },
   { state: "Tripura" },
   { state: "Uttar Pradesh" },
-  { state: "Uttarakhand", aliases: ["Uttaranchal"] },
-  { state: "West Bengal" },
-  { state: "Andaman and Nicobar Islands", aliases: ["Andaman Nicobar"] },
+  { state: "Uttarakhand", aliases: ["Uttaranchal", "Uttarakhand"] },
+  { state: "West Bengal", aliases: ["Bengal"] },
+  {
+    state: "Andaman and Nicobar Islands",
+    aliases: [
+      "Andaman Nicobar",
+      "Andaman & Nicobar Islands",
+      "Andaman and Nicobar",
+    ],
+  },
   { state: "Chandigarh" },
   {
     state: "Dadra and Nagar Haveli and Daman and Diu",
-    aliases: ["Dadra and Nagar Haveli", "Daman and Diu"],
+    aliases: [
+      "Dadra and Nagar Haveli",
+      "Daman and Diu",
+      "Dadra & Nagar Haveli and Daman & Diu",
+      "Dadra Nagar Haveli and Daman Diu",
+      "DNHDD",
+    ],
   },
   {
     state: "Delhi",
-    aliases: ["NCT of Delhi", "National Capital Territory"],
+    aliases: [
+      "NCT of Delhi",
+      "National Capital Territory",
+      "NCT Delhi",
+      "Delhi NCT",
+    ],
   },
   {
     state: "Jammu and Kashmir",
-    aliases: ["Jammu Kashmir", "J and K", "J&K", "Jammu & Kashmir"],
+    aliases: [
+      "Jammu Kashmir",
+      "J and K",
+      "J&K",
+      "Jammu & Kashmir",
+      "J K",
+      "Jammu Kashmir UT",
+    ],
   },
   { state: "Ladakh" },
-  { state: "Lakshadweep" },
-  { state: "Puducherry", aliases: ["Pondicherry"] },
+  { state: "Lakshadweep", aliases: ["Laccadive", "Laccadives"] },
+  { state: "Puducherry", aliases: ["Pondicherry", "Pondichery"] },
 ];
 
 const CITY_ALIAS_OVERRIDES: CityLexiconEntry[] = [
   { city: "Mumbai", state: "Maharashtra", aliases: ["Bombay"] },
   { city: "Delhi", state: "Delhi" },
   { city: "New Delhi", state: "Delhi" },
-  { city: "Bengaluru", state: "Karnataka", aliases: ["Bangalore"] },
+  {
+    city: "Bengaluru",
+    state: "Karnataka",
+    aliases: ["Bangalore", "Bengalooru"],
+  },
   { city: "Kolkata", state: "West Bengal", aliases: ["Calcutta"] },
   { city: "Chennai", state: "Tamil Nadu", aliases: ["Madras"] },
   { city: "Hyderabad", state: "Telangana" },
-  { city: "Pune", state: "Maharashtra" },
+  { city: "Pune", state: "Maharashtra", aliases: ["Poona"] },
   { city: "Ahmedabad", state: "Gujarat" },
   { city: "Surat", state: "Gujarat" },
   { city: "Jaipur", state: "Rajasthan" },
   { city: "Lucknow", state: "Uttar Pradesh" },
-  { city: "Kanpur", state: "Uttar Pradesh" },
+  { city: "Kanpur", state: "Uttar Pradesh", aliases: ["Cawnpore"] },
   { city: "Nagpur", state: "Maharashtra" },
   { city: "Indore", state: "Madhya Pradesh" },
   { city: "Bhopal", state: "Madhya Pradesh" },
   { city: "Patna", state: "Bihar" },
   { city: "Ranchi", state: "Jharkhand" },
-  { city: "Bhubaneswar", state: "Odisha" },
-  { city: "Guwahati", state: "Assam" },
+  { city: "Bhubaneswar", state: "Odisha", aliases: ["Bhuvaneshwar"] },
+  { city: "Guwahati", state: "Assam", aliases: ["Gauhati"] },
   { city: "Chandigarh", state: "Chandigarh" },
   { city: "Srinagar", state: "Jammu and Kashmir" },
+  { city: "Jammu", state: "Jammu and Kashmir", aliases: ["Jummoo"] },
   { city: "Leh", state: "Ladakh" },
   { city: "Noida", state: "Uttar Pradesh" },
   { city: "Gurugram", state: "Haryana", aliases: ["Gurgaon"] },
   { city: "Faridabad", state: "Haryana" },
   { city: "Ghaziabad", state: "Uttar Pradesh" },
-  { city: "Kochi", state: "Kerala", aliases: ["Cochin"] },
+  { city: "Kochi", state: "Kerala", aliases: ["Cochin", "Kochin"] },
   {
     city: "Thiruvananthapuram",
     state: "Kerala",
-    aliases: ["Trivandrum"],
+    aliases: ["Trivandrum", "Trivendrum"],
   },
   { city: "Kozhikode", state: "Kerala", aliases: ["Calicut"] },
+  { city: "Alappuzha", state: "Kerala", aliases: ["Alleppey"] },
+  { city: "Kollam", state: "Kerala", aliases: ["Quilon"] },
+  { city: "Kannur", state: "Kerala", aliases: ["Cannanore"] },
+  { city: "Thrissur", state: "Kerala", aliases: ["Trichur"] },
+  { city: "Palakkad", state: "Kerala", aliases: ["Palghat"] },
   { city: "Coimbatore", state: "Tamil Nadu" },
   { city: "Madurai", state: "Tamil Nadu" },
-  { city: "Visakhapatnam", state: "Andhra Pradesh", aliases: ["Vizag"] },
-  { city: "Vijayawada", state: "Andhra Pradesh" },
+  {
+    city: "Visakhapatnam",
+    state: "Andhra Pradesh",
+    aliases: ["Vizag", "Waltair", "Vizagapatam"],
+  },
+  { city: "Vijayawada", state: "Andhra Pradesh", aliases: ["Bezawada"] },
+  {
+    city: "Rajamahendravaram",
+    state: "Andhra Pradesh",
+    aliases: ["Rajahmundry", "Rajamundry"],
+  },
+  { city: "Tirupati", state: "Andhra Pradesh", aliases: ["Tirupathi"] },
   { city: "Mysuru", state: "Karnataka", aliases: ["Mysore"] },
   { city: "Mangaluru", state: "Karnataka", aliases: ["Mangalore"] },
+  { city: "Belgaum", state: "Karnataka", aliases: ["Belagavi"] },
+  {
+    city: "Hubli",
+    state: "Karnataka",
+    aliases: ["Hubballi", "Hubli Dharwad", "Hubballi Dharwad"],
+  },
+  { city: "Gulbarga", state: "Karnataka", aliases: ["Kalaburagi"] },
+  { city: "Bellary", state: "Karnataka", aliases: ["Ballari"] },
+  { city: "Bijapur", state: "Karnataka", aliases: ["Vijayapura"] },
+  { city: "Shimoga", state: "Karnataka", aliases: ["Shivamogga"] },
+  {
+    city: "Chikkamagallooru",
+    state: "Karnataka",
+    aliases: ["Chikmagalur", "Chikkamagaluru"],
+  },
   { city: "Vadodara", state: "Gujarat", aliases: ["Baroda"] },
   { city: "Rajkot", state: "Gujarat" },
   { city: "Jodhpur", state: "Rajasthan" },
   { city: "Amritsar", state: "Punjab" },
-  { city: "Prayagraj", state: "Uttar Pradesh", aliases: ["Allahabad"] },
+  {
+    city: "Prayagraj",
+    state: "Uttar Pradesh",
+    aliases: ["Allahabad", "Ilahabad"],
+  },
+  {
+    city: "Varanasi",
+    state: "Uttar Pradesh",
+    aliases: ["Banaras", "Benares", "Kashi"],
+  },
+  {
+    city: "Mughalsarai",
+    state: "Uttar Pradesh",
+    aliases: [
+      "Pt Deen Dayal Upadhyaya Nagar",
+      "Pandit Deen Dayal Upadhyaya Nagar",
+      "Ddu Nagar",
+    ],
+  },
+  { city: "Faizabad", state: "Uttar Pradesh", aliases: ["Ayodhya"] },
   { city: "Agra", state: "Uttar Pradesh" },
+  { city: "Jabalpur", state: "Madhya Pradesh", aliases: ["Jubbulpore"] },
+  {
+    city: "Aurangabad",
+    state: "Maharashtra",
+    aliases: ["Sambhajinagar", "Chhatrapati Sambhajinagar"],
+  },
+  {
+    city: "Ahmednagar",
+    state: "Maharashtra",
+    aliases: ["Ahilyanagar", "Ahmadnagar"],
+  },
+  { city: "Osmanabad", state: "Maharashtra", aliases: ["Dharashiv"] },
+  {
+    city: "Naya Raipur",
+    state: "Chhattisgarh",
+    aliases: ["Nava Raipur", "Atal Nagar"],
+  },
+  {
+    city: "Tiruchirappalli",
+    state: "Tamil Nadu",
+    aliases: ["Trichy", "Tiruchi", "Trichinopoly"],
+  },
+  { city: "Thanjavur", state: "Tamil Nadu", aliases: ["Tanjore"] },
+  { city: "Tuticorin", state: "Tamil Nadu", aliases: ["Thoothukudi"] },
+  {
+    city: "Ooty",
+    state: "Tamil Nadu",
+    aliases: ["Udhagamandalam", "Udagamandalam", "Ootacamund"],
+  },
+  {
+    city: "Kanchipuram",
+    state: "Tamil Nadu",
+    aliases: ["Kancheepuram", "Conjeevaram"],
+  },
+  { city: "Nagercoil", state: "Tamil Nadu", aliases: ["Nagerkoil"] },
+  {
+    city: "Puducherry",
+    state: "Puducherry",
+    aliases: ["Pondicherry", "Pondi"],
+  },
+  { city: "Siliguri", state: "West Bengal", aliases: ["Shiliguri"] },
 ];
 
 interface CanonicalCityState {
@@ -778,10 +898,47 @@ const parseCitiesCsv = (csvText: string): CityLexiconEntry[] => {
   return parsedEntries;
 };
 
+const ensureStateCoverageFromCities = (entries: CityLexiconEntry[]): void => {
+  const missingStates = new Set<string>();
+
+  for (const entry of entries) {
+    const state = normalizeText(entry.state);
+
+    if (!state) {
+      continue;
+    }
+
+    const stateKey = normalizeLocationKey(state);
+
+    if (!STATE_ALIAS_TO_CANONICAL.has(stateKey)) {
+      missingStates.add(state);
+    }
+  }
+
+  if (missingStates.size === 0) {
+    return;
+  }
+
+  for (const state of missingStates) {
+    registerStateEntry({ state });
+  }
+
+  logger.warn(
+    {
+      missingStates: Array.from(missingStates).sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    },
+    "Detected states in cities CSV missing from static state lexicon; registered dynamically",
+  );
+};
+
 const loadLocalCitiesCsvLexicon = (): void => {
   try {
     const csvText = readFileSync(LOCAL_CITIES_CSV_FILE_URL, "utf8");
     const localCityEntries = parseCitiesCsv(csvText);
+
+    ensureStateCoverageFromCities(localCityEntries);
 
     for (const entry of localCityEntries) {
       registerCityEntry(entry);
