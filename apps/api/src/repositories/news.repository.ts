@@ -38,32 +38,45 @@ export class NewsRepository {
     try {
       const result = await getDb().execute(sql`
         SELECT
-          l.id,
+          n.id,
           n.id AS news_item_id,
           n.headline,
           n.summary,
           n.source_url,
-          l.location_name,
-          l.city,
-          l.state,
+          l_primary.location_name,
+          l_primary.city,
+          l_primary.state,
           n.category,
-          CASE WHEN l.geom IS NULL THEN NULL ELSE ST_Y(l.geom::geometry)::text END AS latitude,
-          CASE WHEN l.geom IS NULL THEN NULL ELSE ST_X(l.geom::geometry)::text END AS longitude,
+          ST_Y(l_primary.geom::geometry)::double precision AS latitude,
+          ST_X(l_primary.geom::geometry)::double precision AS longitude,
           n.is_national,
           n.published_at,
           (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
-        FROM ${newsItemLocations} l
-        JOIN ${newsItems} n ON n.id = l.news_item_id
+        FROM ${newsItems} n
+        JOIN LATERAL (
+          SELECT l.location_name, l.city, l.state, l.geom
+          FROM ${newsItemLocations} l
+          WHERE l.news_item_id = n.id
+            AND l.geom IS NOT NULL
+            AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+          ORDER BY l.is_primary DESC
+          LIMIT 1
+        ) l_primary ON TRUE
         WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
-          AND l.geom IS NOT NULL
-          AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+          AND n.is_national = FALSE
+          AND EXISTS (
+            SELECT 1 FROM ${newsItemLocations} l3
+            WHERE l3.news_item_id = n.id
+              AND l3.geom IS NOT NULL
+              AND l3.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+          )
         ORDER BY n.published_at DESC
         LIMIT 300
       `);
 
       let mapped = result.rows.map(
         (row): MapMarker => ({
-          id: row.id as string,
+          id: row.news_item_id as string,
           newsItemId: row.news_item_id as string,
           cities:
             (row.cities_json as string[] | null)?.filter(
@@ -257,7 +270,7 @@ export class NewsRepository {
           SELECT
             ST_Y(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS latitude,
             ST_X(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS longitude,
-            COUNT(*)::int AS count,
+            COUNT(DISTINCT n.id)::int AS count,
             json_agg(DISTINCT n.category) AS categories_json
           FROM ${newsItemLocations} l
           JOIN ${newsItems} n ON n.id = l.news_item_id
@@ -274,63 +287,57 @@ export class NewsRepository {
           const rawCategories = row.categories_json as string[] | null;
           const validCategories = (rawCategories ?? []).filter(isNewsCategory);
 
-          if ((row.count as number) === 1 && validCategories.length === 1) {
-            features.push({
-              id: `marker-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
-              newsItemId: "",
-              cities: [],
-              latitude: row.latitude as number,
-              longitude: row.longitude as number,
-              category: validCategories[0] ?? "General",
-              headline: "",
-              summary: "",
-              sourceUrl: "",
-              city: null,
-              state: null,
-              publishedAt: new Date().toISOString(),
-              isCluster: false,
-            } satisfies MapMarker);
-          } else {
-            features.push({
-              id: `cluster-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
-              latitude: row.latitude as number,
-              longitude: row.longitude as number,
-              count: row.count as number,
-              topCategories: validCategories.slice(0, 3),
-              isCluster: true,
-            } satisfies MapCluster);
-          }
+          features.push({
+            id: `cluster-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
+            latitude: row.latitude as number,
+            longitude: row.longitude as number,
+            count: row.count as number,
+            topCategories: validCategories.slice(0, 3),
+            isCluster: true,
+          } satisfies MapCluster);
         }
       } else {
         const result = await getDb().execute(sql`
           SELECT
-            l.id,
+            n.id,
             n.id AS news_item_id,
             n.headline,
             n.summary,
             n.source_url,
-            l.location_name,
-            l.city,
-            l.state,
+            l_primary.location_name,
+            l_primary.city,
+            l_primary.state,
             n.category,
-            ST_Y(l.geom::geometry)::double precision AS latitude,
-            ST_X(l.geom::geometry)::double precision AS longitude,
+            ST_Y(l_primary.geom::geometry)::double precision AS latitude,
+            ST_X(l_primary.geom::geometry)::double precision AS longitude,
             n.is_national,
             n.published_at,
             (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
-          FROM ${newsItemLocations} l
-          JOIN ${newsItems} n ON n.id = l.news_item_id
+          FROM ${newsItems} n
+          JOIN LATERAL (
+            SELECT l.location_name, l.city, l.state, l.geom
+            FROM ${newsItemLocations} l
+            WHERE l.news_item_id = n.id
+              AND l.geom IS NOT NULL
+              AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+            ORDER BY l.is_primary DESC
+            LIMIT 1
+          ) l_primary ON TRUE
           WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
             AND n.is_national = FALSE
-            AND l.geom IS NOT NULL
-            AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+            AND EXISTS (
+              SELECT 1 FROM ${newsItemLocations} l3
+              WHERE l3.news_item_id = n.id
+                AND l3.geom IS NOT NULL
+                AND l3.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+            )
           ORDER BY n.published_at DESC
           LIMIT 500
         `);
 
         for (const row of result.rows) {
           features.push({
-            id: row.id as string,
+            id: row.news_item_id as string,
             newsItemId: row.news_item_id as string,
             cities:
               (row.cities_json as string[] | null)?.filter(
@@ -420,33 +427,45 @@ export class NewsRepository {
     try {
       const result = await getDb().execute(sql`
         SELECT
-          l.id,
+          n.id,
           n.id AS news_item_id,
           n.headline,
           n.summary,
           n.source_url,
-          l.location_name,
-          l.city,
-          l.state,
+          l_primary.location_name,
+          l_primary.city,
+          l_primary.state,
           n.category,
-          ST_Y(l.geom::geometry)::double precision AS latitude,
-          ST_X(l.geom::geometry)::double precision AS longitude,
+          ST_Y(l_primary.geom::geometry)::double precision AS latitude,
+          ST_X(l_primary.geom::geometry)::double precision AS longitude,
           n.is_national,
           n.published_at,
           (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
-        FROM ${newsItemLocations} l
-        JOIN ${newsItems} n ON n.id = l.news_item_id
+        FROM ${newsItems} n
+        JOIN LATERAL (
+          SELECT l.location_name, l.city, l.state, l.geom
+          FROM ${newsItemLocations} l
+          WHERE l.news_item_id = n.id
+            AND l.geom IS NOT NULL
+            AND ST_DWithin(l.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+          ORDER BY l.is_primary DESC
+          LIMIT 1
+        ) l_primary ON TRUE
         WHERE n.published_at >= NOW() - make_interval(hours => ${hours}::int)
           AND n.is_national = FALSE
-          AND l.geom IS NOT NULL
-          AND ST_DWithin(l.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+          AND EXISTS (
+            SELECT 1 FROM ${newsItemLocations} l3
+            WHERE l3.news_item_id = n.id
+              AND l3.geom IS NOT NULL
+              AND ST_DWithin(l3.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+          )
         ORDER BY n.published_at DESC
         LIMIT ${limit}::int
       `);
 
       return result.rows.map(
         (row): MapMarker => ({
-          id: row.id as string,
+          id: row.news_item_id as string,
           newsItemId: row.news_item_id as string,
           cities:
             (row.cities_json as string[] | null)?.filter(

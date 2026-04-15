@@ -20,6 +20,36 @@ type SocketPayload = {
   locations: NewsItemLocation[]
 }
 
+function deduplicateFeatures(features: MapFeature[]): MapFeature[] {
+  const seen = new Set<string>()
+  const result: MapFeature[] = []
+  for (const f of features) {
+    if (f.isCluster) {
+      result.push(f)
+      continue
+    }
+    if (!f.newsItemId) {
+      result.push(f)
+      continue
+    }
+    if (seen.has(f.newsItemId)) continue
+    seen.add(f.newsItemId)
+    result.push(f)
+  }
+  return result
+}
+
+function deduplicateNationalItems(items: NationalItem[]): NationalItem[] {
+  const seen = new Set<string>()
+  const result: NationalItem[] = []
+  for (const item of items) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    result.push(item)
+  }
+  return result
+}
+
 export const useMapData = (hours = 24, categories?: string[]) => {
   const [features, setFeatures] = useState<MapFeature[]>([])
   const [nationalItems, setNationalItems] = useState<NationalItem[]>([])
@@ -73,8 +103,8 @@ export const useMapData = (hours = 24, categories?: string[]) => {
       const data = (await response.json()) as ClusteredViewportResponse
 
       if (!controller.signal.aborted) {
-        setFeatures(data.features)
-        setNationalItems(data.nationalItems)
+        setFeatures(deduplicateFeatures(data.features))
+        setNationalItems(deduplicateNationalItems(data.nationalItems))
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -125,34 +155,37 @@ export const useMapData = (hours = 24, categories?: string[]) => {
         (loc) => loc.latitude !== null && loc.longitude !== null,
       )
 
+      const primaryLocation = geocodedLocations.find((loc) => loc.isPrimary) ?? geocodedLocations[0]
+
+      if (!primaryLocation) return
+
       const allCities = [...new Set(locations.map((loc) => loc.city).filter((c): c is string => c !== null))]
 
-      if (geocodedLocations.length > 0) {
-        setFeatures((prev) => {
-          const newMarkers: MapFeature[] = geocodedLocations.map((loc) => ({
-            id: loc.id,
-            newsItemId: article.id,
-            cities: allCities,
-            latitude: loc.latitude!,
-            longitude: loc.longitude!,
-            category: article.category,
-            headline: article.headline,
-            summary: article.summary,
-            sourceUrl: article.sourceUrl,
-            city: loc.city,
-            state: loc.state,
-            publishedAt: article.publishedAt,
-            isCluster: false as const,
-          }))
+      setFeatures((prev) => {
+        const existingNewsItemIds = new Set(
+          prev.filter((f) => !f.isCluster).map((f) => f.newsItemId),
+        )
 
-          const existingIds = new Set(prev.map((f) => f.id))
-          const uniqueNew = newMarkers.filter((m) => !existingIds.has(m.id))
+        if (existingNewsItemIds.has(article.id)) return prev
 
-          if (uniqueNew.length === 0) return prev
+        const marker: MapFeature = {
+          id: primaryLocation.id,
+          newsItemId: article.id,
+          cities: allCities,
+          latitude: primaryLocation.latitude!,
+          longitude: primaryLocation.longitude!,
+          category: article.category,
+          headline: article.headline,
+          summary: article.summary,
+          sourceUrl: article.sourceUrl,
+          city: primaryLocation.city,
+          state: primaryLocation.state,
+          publishedAt: article.publishedAt,
+          isCluster: false,
+        }
 
-          return [...uniqueNew, ...prev].slice(0, 500)
-        })
-      }
+        return [marker, ...prev].slice(0, 500)
+      })
     }
 
     socket.on('news:created', onNewsCreated)

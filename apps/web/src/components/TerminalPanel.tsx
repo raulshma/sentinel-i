@@ -495,7 +495,7 @@ export function TerminalPanel({
             </div>
           )}
           {logs.map((log, idx) => (
-            <LogEntry key={log.streamId ?? log.id ?? idx} log={log} />
+            <LogEntry key={log.id ?? `${log.streamId}-${log.createdAt}-${idx}`} log={log} />
           ))}
         </div>
       ) : null}
