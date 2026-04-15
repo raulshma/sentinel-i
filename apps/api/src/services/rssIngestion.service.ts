@@ -233,10 +233,102 @@ interface CityLexiconEntry {
   aliases?: string[];
 }
 
-interface IndiaLocationLexicon {
-  states: StateLexiconEntry[];
-  cities: CityLexiconEntry[];
-}
+const STATE_LEXICON: StateLexiconEntry[] = [
+  { state: "Andhra Pradesh" },
+  { state: "Arunachal Pradesh" },
+  { state: "Assam" },
+  { state: "Bihar" },
+  { state: "Chhattisgarh" },
+  { state: "Goa" },
+  { state: "Gujarat" },
+  { state: "Haryana" },
+  { state: "Himachal Pradesh" },
+  { state: "Jharkhand" },
+  { state: "Karnataka" },
+  { state: "Kerala" },
+  { state: "Madhya Pradesh" },
+  { state: "Maharashtra" },
+  { state: "Manipur" },
+  { state: "Meghalaya" },
+  { state: "Mizoram" },
+  { state: "Nagaland" },
+  { state: "Odisha", aliases: ["Orissa"] },
+  { state: "Punjab" },
+  { state: "Rajasthan" },
+  { state: "Sikkim" },
+  { state: "Tamil Nadu" },
+  { state: "Telangana" },
+  { state: "Tripura" },
+  { state: "Uttar Pradesh" },
+  { state: "Uttarakhand", aliases: ["Uttaranchal"] },
+  { state: "West Bengal" },
+  { state: "Andaman and Nicobar Islands", aliases: ["Andaman Nicobar"] },
+  { state: "Chandigarh" },
+  {
+    state: "Dadra and Nagar Haveli and Daman and Diu",
+    aliases: ["Dadra and Nagar Haveli", "Daman and Diu"],
+  },
+  {
+    state: "Delhi",
+    aliases: ["NCT of Delhi", "National Capital Territory"],
+  },
+  {
+    state: "Jammu and Kashmir",
+    aliases: ["Jammu Kashmir", "J and K", "J&K", "Jammu & Kashmir"],
+  },
+  { state: "Ladakh" },
+  { state: "Lakshadweep" },
+  { state: "Puducherry", aliases: ["Pondicherry"] },
+];
+
+const CITY_ALIAS_OVERRIDES: CityLexiconEntry[] = [
+  { city: "Mumbai", state: "Maharashtra", aliases: ["Bombay"] },
+  { city: "Delhi", state: "Delhi" },
+  { city: "New Delhi", state: "Delhi" },
+  { city: "Bengaluru", state: "Karnataka", aliases: ["Bangalore"] },
+  { city: "Kolkata", state: "West Bengal", aliases: ["Calcutta"] },
+  { city: "Chennai", state: "Tamil Nadu", aliases: ["Madras"] },
+  { city: "Hyderabad", state: "Telangana" },
+  { city: "Pune", state: "Maharashtra" },
+  { city: "Ahmedabad", state: "Gujarat" },
+  { city: "Surat", state: "Gujarat" },
+  { city: "Jaipur", state: "Rajasthan" },
+  { city: "Lucknow", state: "Uttar Pradesh" },
+  { city: "Kanpur", state: "Uttar Pradesh" },
+  { city: "Nagpur", state: "Maharashtra" },
+  { city: "Indore", state: "Madhya Pradesh" },
+  { city: "Bhopal", state: "Madhya Pradesh" },
+  { city: "Patna", state: "Bihar" },
+  { city: "Ranchi", state: "Jharkhand" },
+  { city: "Bhubaneswar", state: "Odisha" },
+  { city: "Guwahati", state: "Assam" },
+  { city: "Chandigarh", state: "Chandigarh" },
+  { city: "Srinagar", state: "Jammu and Kashmir" },
+  { city: "Leh", state: "Ladakh" },
+  { city: "Noida", state: "Uttar Pradesh" },
+  { city: "Gurugram", state: "Haryana", aliases: ["Gurgaon"] },
+  { city: "Faridabad", state: "Haryana" },
+  { city: "Ghaziabad", state: "Uttar Pradesh" },
+  { city: "Kochi", state: "Kerala", aliases: ["Cochin"] },
+  {
+    city: "Thiruvananthapuram",
+    state: "Kerala",
+    aliases: ["Trivandrum"],
+  },
+  { city: "Kozhikode", state: "Kerala", aliases: ["Calicut"] },
+  { city: "Coimbatore", state: "Tamil Nadu" },
+  { city: "Madurai", state: "Tamil Nadu" },
+  { city: "Visakhapatnam", state: "Andhra Pradesh", aliases: ["Vizag"] },
+  { city: "Vijayawada", state: "Andhra Pradesh" },
+  { city: "Mysuru", state: "Karnataka", aliases: ["Mysore"] },
+  { city: "Mangaluru", state: "Karnataka", aliases: ["Mangalore"] },
+  { city: "Vadodara", state: "Gujarat", aliases: ["Baroda"] },
+  { city: "Rajkot", state: "Gujarat" },
+  { city: "Jodhpur", state: "Rajasthan" },
+  { city: "Amritsar", state: "Punjab" },
+  { city: "Prayagraj", state: "Uttar Pradesh", aliases: ["Allahabad"] },
+  { city: "Agra", state: "Uttar Pradesh" },
+];
 
 interface CanonicalCityState {
   city: string;
@@ -261,97 +353,6 @@ type AliasMatchCandidate =
       state: string;
       priority: number;
     };
-
-const sanitizeAliasList = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => normalizeText(entry))
-    .filter((entry) => entry.length > 0);
-};
-
-const loadIndiaLocationLexicon = (): IndiaLocationLexicon => {
-  const lexiconFileUrl = new URL(
-    "../data/india-location-lexicon.json",
-    import.meta.url,
-  );
-
-  try {
-    const raw = readFileSync(lexiconFileUrl, "utf8");
-    const parsed = JSON.parse(raw) as {
-      states?: unknown;
-      cities?: unknown;
-    };
-
-    const states = Array.isArray(parsed.states)
-      ? parsed.states.flatMap((entry): StateLexiconEntry[] => {
-          if (!entry || typeof entry !== "object") {
-            return [];
-          }
-
-          const state = normalizeText(
-            (entry as { state?: unknown }).state?.toString() ?? "",
-          );
-
-          if (state.length === 0) {
-            return [];
-          }
-
-          const aliases = sanitizeAliasList(
-            (entry as { aliases?: unknown }).aliases,
-          );
-
-          return [{ state, ...(aliases.length > 0 ? { aliases } : {}) }];
-        })
-      : [];
-
-    const cities = Array.isArray(parsed.cities)
-      ? parsed.cities.flatMap((entry): CityLexiconEntry[] => {
-          if (!entry || typeof entry !== "object") {
-            return [];
-          }
-
-          const city = normalizeText(
-            (entry as { city?: unknown }).city?.toString() ?? "",
-          );
-          const state = normalizeText(
-            (entry as { state?: unknown }).state?.toString() ?? "",
-          );
-
-          if (city.length === 0 || state.length === 0) {
-            return [];
-          }
-
-          const aliases = sanitizeAliasList(
-            (entry as { aliases?: unknown }).aliases,
-          );
-
-          return [{ city, state, ...(aliases.length > 0 ? { aliases } : {}) }];
-        })
-      : [];
-
-    if (states.length === 0 || cities.length === 0) {
-      throw new Error("Lexicon JSON is missing required states/cities entries");
-    }
-
-    return { states, cities };
-  } catch (error) {
-    logger.error(
-      {
-        error,
-        lexiconFile: lexiconFileUrl.pathname,
-      },
-      "Failed to load India location lexicon",
-    );
-
-    throw error;
-  }
-};
-
-const INDIA_LOCATION_LEXICON = loadIndiaLocationLexicon();
 
 const LOCATION_SIGNAL_IGNORE_LIST = new Set([
   "india",
@@ -501,11 +502,11 @@ const registerCityEntry = (entry: CityLexiconEntry): void => {
   }
 };
 
-for (const entry of INDIA_LOCATION_LEXICON.states) {
+for (const entry of STATE_LEXICON) {
   registerStateEntry(entry);
 }
 
-for (const entry of INDIA_LOCATION_LEXICON.cities) {
+for (const entry of CITY_ALIAS_OVERRIDES) {
   registerCityEntry(entry);
 }
 
@@ -802,7 +803,7 @@ const loadLocalCitiesCsvLexicon = (): void => {
         error,
         sourceFile: LOCAL_CITIES_CSV_FILE_URL.href,
       },
-      "Failed to load local Indian cities CSV; continuing with JSON lexicon",
+      "Failed to load local Indian cities CSV; continuing with state/city overrides",
     );
   }
 };
