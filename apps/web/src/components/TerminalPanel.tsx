@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Terminal, X, ChevronDown, Play, Clock } from 'lucide-react'
+import { Terminal, X, ChevronDown, Play, Clock, Maximize2, Minimize2 } from 'lucide-react'
 import type { ProcessingLogEntry, ProcessingStatus, ProcessingStage } from '../hooks/useProcessingLogs'
 
 const STAGE_LABELS: Record<ProcessingStage, string> = {
@@ -125,6 +125,11 @@ export function TerminalPanel({
 }: TerminalPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const shouldAutoScroll = useRef(true)
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  const handleToggleMaximize = useCallback(() => {
+    setIsMaximized((prev) => !prev)
+  }, [])
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
@@ -178,21 +183,33 @@ export function TerminalPanel({
         </button>
       </div>
 
-      {isOpen && (
-        <div
-          role="log"
-          aria-label="Article processing terminal"
-          className="glass-panel animate-in fade-in-0 zoom-in-95 absolute bottom-full right-0 mb-2 w-[640px] max-w-[calc(100vw-1.5rem)] overflow-hidden duration-150"
-          style={{ height: 320 }}
-        >
-          <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Terminal size={12} className="text-sky-400" aria-hidden="true" />
-              <span className="text-[11px] font-mono text-slate-300">Processing Terminal</span>
-              <span className="text-[9px] text-slate-500 font-mono">
-                {logs.length} entries
-              </span>
-            </div>
+      <div
+        role="log"
+        aria-label="Article processing terminal"
+        className={`glass-panel overflow-hidden rounded-xl transition-all duration-200 ${
+          isMaximized && isOpen
+            ? 'fixed inset-3 z-50 flex flex-col'
+            : 'absolute bottom-full right-0 mb-2 w-[640px] max-w-[calc(100vw-1.5rem)]'
+        } ${isOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none invisible opacity-0'}`}
+        style={isMaximized && isOpen ? undefined : { height: 320 }}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <Terminal size={12} className="text-sky-400" aria-hidden="true" />
+            <span className="text-[11px] font-mono text-slate-300">Processing Terminal</span>
+            <span className="text-[9px] text-slate-500 font-mono">
+              {logs.length} entries
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              aria-label={isMaximized ? 'Restore terminal' : 'Maximize terminal'}
+              className="text-slate-400 transition-colors hover:text-white"
+            >
+              {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            </button>
             <button
               type="button"
               onClick={onToggle}
@@ -202,23 +219,25 @@ export function TerminalPanel({
               <X size={12} />
             </button>
           </div>
-
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            className="h-[calc(100%-36px)] overflow-y-auto bg-black/30 p-2 font-mono text-[11px] leading-5"
-          >
-            {logs.length === 0 && (
-              <div className="flex h-full items-center justify-center text-slate-500">
-                Waiting for processing events...
-              </div>
-            )}
-            {logs.map((log, idx) => (
-              <LogEntry key={log.streamId ?? log.id ?? idx} log={log} />
-            ))}
-          </div>
         </div>
-      )}
+
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className={`overflow-y-auto bg-black/30 p-2 font-mono text-[11px] leading-5 ${
+            isMaximized ? 'min-h-0 flex-1' : 'h-[calc(100%-36px)]'
+          }`}
+        >
+          {logs.length === 0 && (
+            <div className="flex h-full items-center justify-center text-slate-500">
+              Waiting for processing events...
+            </div>
+          )}
+          {logs.map((log, idx) => (
+            <LogEntry key={log.streamId ?? log.id ?? idx} log={log} />
+          ))}
+        </div>
+      </div>
     </>
   )
 }
