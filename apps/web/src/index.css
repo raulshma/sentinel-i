@@ -79,4 +79,12 @@ body {
   .maplibregl-popup-tip {
     @apply hidden!;
   }
+
+  [data-scroll-area-viewport] {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  [data-scroll-area-viewport]::-webkit-scrollbar {
+    display: none;
+  }
 }

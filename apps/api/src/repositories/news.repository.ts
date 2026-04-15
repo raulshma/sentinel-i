@@ -43,6 +43,7 @@ export class NewsRepository {
       const result = await getDb().execute(sql`
         SELECT
           l.id,
+          n.id AS news_item_id,
           n.headline,
           n.summary,
           n.source_url,
@@ -53,7 +54,8 @@ export class NewsRepository {
           CASE WHEN l.geom IS NULL THEN NULL ELSE ST_Y(l.geom::geometry)::text END AS latitude,
           CASE WHEN l.geom IS NULL THEN NULL ELSE ST_X(l.geom::geometry)::text END AS longitude,
           n.is_national,
-          n.published_at
+          n.published_at,
+          (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
         FROM ${newsItemLocations} l
         JOIN ${newsItems} n ON n.id = l.news_item_id
         WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
@@ -65,6 +67,8 @@ export class NewsRepository {
 
       let mapped = result.rows.map((row): MapMarker => ({
         id: row.id as string,
+        newsItemId: row.news_item_id as string,
+        cities: (row.cities_json as string[] | null)?.filter((c): c is string => c !== null) ?? [],
         headline: row.headline as string,
         summary: row.summary as string,
         sourceUrl: row.source_url as string,
@@ -250,6 +254,8 @@ export class NewsRepository {
           if ((row.count as number) === 1 && validCategories.length === 1) {
             features.push({
               id: `marker-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
+              newsItemId: '',
+              cities: [],
               latitude: row.latitude as number,
               longitude: row.longitude as number,
               category: validCategories[0] ?? 'General',
@@ -276,6 +282,7 @@ export class NewsRepository {
         const result = await getDb().execute(sql`
           SELECT
             l.id,
+            n.id AS news_item_id,
             n.headline,
             n.summary,
             n.source_url,
@@ -286,7 +293,8 @@ export class NewsRepository {
             ST_Y(l.geom::geometry)::double precision AS latitude,
             ST_X(l.geom::geometry)::double precision AS longitude,
             n.is_national,
-            n.published_at
+            n.published_at,
+            (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
           FROM ${newsItemLocations} l
           JOIN ${newsItems} n ON n.id = l.news_item_id
           WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
@@ -300,6 +308,8 @@ export class NewsRepository {
         for (const row of result.rows) {
           features.push({
             id: row.id as string,
+            newsItemId: row.news_item_id as string,
+            cities: (row.cities_json as string[] | null)?.filter((c): c is string => c !== null) ?? [],
             headline: row.headline as string,
             summary: row.summary as string,
             sourceUrl: row.source_url as string,
@@ -379,6 +389,7 @@ export class NewsRepository {
       const result = await getDb().execute(sql`
         SELECT
           l.id,
+          n.id AS news_item_id,
           n.headline,
           n.summary,
           n.source_url,
@@ -389,7 +400,8 @@ export class NewsRepository {
           ST_Y(l.geom::geometry)::double precision AS latitude,
           ST_X(l.geom::geometry)::double precision AS longitude,
           n.is_national,
-          n.published_at
+          n.published_at,
+          (SELECT json_agg(DISTINCT l2.city) FROM ${newsItemLocations} l2 WHERE l2.news_item_id = n.id AND l2.city IS NOT NULL) AS cities_json
         FROM ${newsItemLocations} l
         JOIN ${newsItems} n ON n.id = l.news_item_id
         WHERE n.published_at >= NOW() - make_interval(hours => ${hours}::int)
@@ -402,6 +414,8 @@ export class NewsRepository {
 
       return result.rows.map((row): MapMarker => ({
         id: row.id as string,
+        newsItemId: row.news_item_id as string,
+        cities: (row.cities_json as string[] | null)?.filter((c): c is string => c !== null) ?? [],
         headline: row.headline as string,
         summary: row.summary as string,
         sourceUrl: row.source_url as string,

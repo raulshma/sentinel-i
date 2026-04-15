@@ -53,7 +53,7 @@ const parseCategories = (raw: string | undefined): NewsCategory[] | undefined =>
 const clusterArticlesSchema = z.object({
   longitude: z.coerce.number().min(-180).max(180),
   latitude: z.coerce.number().min(-90).max(90),
-  radius: z.coerce.number().min(100).max(50000).default(5000),
+  radius: z.coerce.number().min(100).max(500000).default(5000),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   hours: z.coerce.number().int().min(1).max(72).default(24),
 })

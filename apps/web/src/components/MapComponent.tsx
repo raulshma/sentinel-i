@@ -1,13 +1,29 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type MapLibreGL from 'maplibre-gl'
 
 import {
-  Map,
+  Map as MapGL,
   MapClusterLayer,
   MapControls,
   MapPopup,
+  MapRoute,
+  useMap,
   type MapViewport,
 } from '@/components/ui/map'
 import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from '@/types/map'
+
+function normalizeCities(cities: unknown): string[] {
+  if (Array.isArray(cities)) return cities
+  if (typeof cities === 'string' && cities.length > 0) {
+    try {
+      const parsed = JSON.parse(cities)
+      if (Array.isArray(parsed)) return parsed
+    } catch {
+      return cities.split(',').map((c) => c.trim()).filter(Boolean)
+    }
+  }
+  return []
+}
 
 const INDIA_CENTER: [number, number] = [78.9629, 20.5937]
 const DEFAULT_ZOOM = 4.5
@@ -20,6 +36,13 @@ interface NewsProperties {
   category: string
   color: string
   headline: string
+  newsItemId: string
+  cities: string[]
+  city: string | null
+  state: string | null
+  summary: string
+  sourceUrl: string
+  publishedAt: string
 }
 
 interface MapComponentProps {
@@ -53,6 +76,10 @@ export function MapComponent({
     properties: NewsProperties
   } | null>(null)
 
+  const [highlightedArticleId, setHighlightedArticleId] = useState<string | null>(null)
+
+  const currentZoomRef = useRef(mapZoom)
+
   const geojsonData = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point, NewsProperties>>(
     () => ({
       type: 'FeatureCollection',
@@ -71,14 +98,42 @@ export function MapComponent({
               ? CATEGORY_COLORS[f.topCategories[0] ?? 'General']
               : CATEGORY_COLORS[f.category],
             headline: f.isCluster ? `${f.count} articles` : f.headline,
+            newsItemId: f.isCluster ? '' : f.newsItemId,
+            cities: f.isCluster ? [] : f.cities,
+            city: f.isCluster ? null : f.city,
+            state: f.isCluster ? null : f.state,
+            summary: f.isCluster ? '' : f.summary,
+            sourceUrl: f.isCluster ? '' : f.sourceUrl,
+            publishedAt: f.isCluster ? '' : f.publishedAt,
           },
         })),
     }),
     [features],
   )
 
+  const articleGroups = useMemo(() => {
+    const groups = new Map<string, MapFeature[]>()
+    for (const f of features) {
+      if (f.isCluster) continue
+      const key = f.newsItemId
+      if (!key) continue
+      const group = groups.get(key) ?? []
+      group.push(f)
+      groups.set(key, group)
+    }
+    return [...groups.values()].filter((g) => g.length >= 2)
+  }, [features])
+
+  const highlightFeatures = useMemo(() => {
+    if (!highlightedArticleId) return []
+    return features.filter(
+      (f) => !f.isCluster && f.newsItemId === highlightedArticleId,
+    )
+  }, [features, highlightedArticleId])
+
   const handleViewportChange = useCallback(
     (viewport: MapViewport) => {
+      currentZoomRef.current = viewport.zoom
       const bounds = {
         minLng: viewport.center[0] - 360 / Math.pow(2, viewport.zoom),
         minLat: viewport.center[1] - 180 / Math.pow(2, viewport.zoom),
@@ -93,21 +148,25 @@ export function MapComponent({
 
   const handlePointClick = useCallback(
     (feature: GeoJSON.Feature<GeoJSON.Point, NewsProperties>, coordinates: [number, number]) => {
+      const p = feature.properties
       const mapFeature: MapFeature = {
-        id: feature.properties.id,
+        id: p.id,
+        newsItemId: p.newsItemId,
+        cities: p.cities,
         latitude: coordinates[1],
         longitude: coordinates[0],
-        category: feature.properties.category as NewsCategory,
-        headline: feature.properties.headline,
-        summary: '',
-        sourceUrl: '',
-        city: null,
-        state: null,
-        publishedAt: new Date().toISOString(),
+        category: p.category as NewsCategory,
+        headline: p.headline,
+        summary: p.summary,
+        sourceUrl: p.sourceUrl,
+        city: p.city,
+        state: p.state,
+        publishedAt: p.publishedAt,
         isCluster: false,
       }
 
-      setSelectedPoint({ coordinates, properties: feature.properties })
+      setSelectedPoint({ coordinates, properties: p })
+      setHighlightedArticleId(p.newsItemId || null)
       onFeatureClick?.(mapFeature)
     },
     [onFeatureClick],
@@ -121,6 +180,7 @@ export function MapComponent({
         longitude: coordinates[0],
         count: pointCount,
         topCategories: ['General'],
+        zoom: currentZoomRef.current,
         isCluster: true,
       }
 
@@ -131,7 +191,7 @@ export function MapComponent({
 
   return (
     <div className="relative h-full w-full">
-      <Map
+      <MapGL
         center={mapCenter}
         zoom={mapZoom}
         minZoom={3}
@@ -139,6 +199,30 @@ export function MapComponent({
         theme="dark"
         onViewportChange={handleViewportChange}
       >
+        {articleGroups.map((group) => {
+          const first = group[0]
+          if (first.isCluster) return null
+          const coords = group
+            .filter((f): f is typeof first => !f.isCluster)
+            .map((f) => [f.longitude, f.latitude] as [number, number])
+          const color = CATEGORY_COLORS[first.category] ?? '#64748b'
+          const articleId = first.newsItemId
+          const isHighlighted = articleId === highlightedArticleId
+
+          return (
+            <MapRoute
+              key={articleId}
+              id={`link-${articleId}`}
+              coordinates={coords}
+              color={color}
+              width={isHighlighted ? 2 : 1.5}
+              opacity={isHighlighted ? 0.7 : 0.35}
+              dashArray={[4, 4]}
+              interactive={false}
+            />
+          )
+        })}
+
         <MapClusterLayer<NewsProperties>
           data={geojsonData}
           clusterRadius={50}
@@ -150,6 +234,11 @@ export function MapComponent({
           onClusterClick={handleClusterClick}
         />
 
+        <HighlightLayer
+          features={highlightFeatures}
+          highlightedArticleId={highlightedArticleId}
+        />
+
         <MapControls position="bottom-right" showZoom showCompass={false} />
 
         {selectedPoint && (
@@ -157,28 +246,43 @@ export function MapComponent({
             key={`${selectedPoint.coordinates[0]}-${selectedPoint.coordinates[1]}`}
             longitude={selectedPoint.coordinates[0]}
             latitude={selectedPoint.coordinates[1]}
-            onClose={() => setSelectedPoint(null)}
+            onClose={() => {
+              setSelectedPoint(null)
+              setHighlightedArticleId(null)
+            }}
             closeOnClick={false}
             focusAfterOpen={false}
             closeButton
           >
-            <div className="space-y-1 p-1">
+            <div className="min-w-[200px] max-w-[280px] space-y-2 p-1">
               <div className="flex items-center gap-2">
                 <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: selectedPoint.properties.color }}
+                  className="inline-block h-2.5 w-2.5 rounded-full shadow-sm"
+                  style={{ backgroundColor: selectedPoint.properties.color, boxShadow: `0 0 6px ${selectedPoint.properties.color}60` }}
                 />
-                <span className="text-xs font-medium text-slate-300">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   {selectedPoint.properties.category}
                 </span>
               </div>
-              <p className="text-sm text-slate-100">
+              <p className="text-[13px] font-medium leading-snug text-slate-100 break-words overflow-wrap-anywhere">
                 {selectedPoint.properties.headline}
               </p>
+              {normalizeCities(selectedPoint.properties.cities).length > 1 && (
+                <div className="flex flex-wrap gap-1">
+                  {normalizeCities(selectedPoint.properties.cities).map((city) => (
+                    <span
+                      key={city}
+                      className="rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-slate-300"
+                    >
+                      {city}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </MapPopup>
         )}
-      </Map>
+      </MapGL>
 
       {isLoading && (
         <div className="pointer-events-none absolute right-3 top-3 z-10">
@@ -190,4 +294,80 @@ export function MapComponent({
       )}
     </div>
   )
+}
+
+function HighlightLayer({
+  features,
+  highlightedArticleId,
+}: {
+  features: MapFeature[]
+  highlightedArticleId: string | null
+}) {
+  const { map, isLoaded } = useMap()
+  const layerId = 'highlight-pulse'
+  const sourceId = 'highlight-pulse-source'
+  const prevArticleRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!isLoaded || !map) return
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+    }
+
+    if (!map.getLayer(layerId)) {
+      map.addLayer({
+        id: layerId,
+        type: 'circle',
+        source: sourceId,
+        paint: {
+          'circle-radius': 12,
+          'circle-color': '#38bdf8',
+          'circle-opacity': 0.3,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#38bdf8',
+          'circle-stroke-opacity': 0.6,
+        },
+      })
+    }
+
+    return () => {
+      try {
+        if (map.getLayer(layerId)) map.removeLayer(layerId)
+        if (map.getSource(sourceId)) map.removeSource(sourceId)
+      } catch {
+        // ignore
+      }
+    }
+  }, [isLoaded, map])
+
+  useEffect(() => {
+    if (!isLoaded || !map || !map.getSource(sourceId)) return
+
+    if (prevArticleRef.current === highlightedArticleId) return
+    prevArticleRef.current = highlightedArticleId
+
+    const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource
+
+    if (!highlightedArticleId || features.length === 0) {
+      source.setData({ type: 'FeatureCollection', features: [] })
+      return
+    }
+
+    const geojsonFeatures: GeoJSON.Feature<GeoJSON.Point>[] = features.map((f) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [f.longitude, f.latitude],
+      },
+      properties: {},
+    }))
+
+    source.setData({ type: 'FeatureCollection', features: geojsonFeatures })
+  }, [isLoaded, map, features, highlightedArticleId])
+
+  return null
 }

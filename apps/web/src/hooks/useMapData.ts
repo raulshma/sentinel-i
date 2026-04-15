@@ -125,10 +125,14 @@ export const useMapData = (hours = 24, categories?: string[]) => {
         (loc) => loc.latitude !== null && loc.longitude !== null,
       )
 
+      const allCities = [...new Set(locations.map((loc) => loc.city).filter((c): c is string => c !== null))]
+
       if (geocodedLocations.length > 0) {
         setFeatures((prev) => {
           const newMarkers: MapFeature[] = geocodedLocations.map((loc) => ({
             id: loc.id,
+            newsItemId: article.id,
+            cities: allCities,
             latitude: loc.latitude!,
             longitude: loc.longitude!,
             category: article.category,

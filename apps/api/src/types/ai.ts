@@ -4,26 +4,29 @@ export const locationExtractionSchema = z.object({
   location_name: z
     .string()
     .describe(
-      'Specific landmark, neighborhood, or district mentioned. Null if not locally specific.',
+      'Specific landmark, neighborhood, district, or area mentioned (e.g. "Sector 62, Noida", "Andheri", "Koramangala"). Null if only a city or state is mentioned.',
     )
     .nullable(),
   city: z
     .string()
-    .describe('City name if found. Null if not mentioned.')
+    .describe('City name if found (e.g. "Mumbai", "Bengaluru", "Delhi"). Use the modern official name (Bengaluru not Bangalore, Kolkata not Calcutta). Null if not mentioned.')
     .nullable(),
   state: z
     .string()
-    .describe('Indian state or union territory. Null if not mentioned.')
+    .describe('Indian state or union territory (e.g. "Maharashtra", "Karnataka", "Delhi"). Always fill this when a city is known. Null if not mentioned.')
     .nullable(),
 })
 
 export const newsExtractionSchema = z.object({
   locations: z
     .array(locationExtractionSchema)
+    .min(0)
     .describe(
-      'All distinct Indian geographic locations mentioned in the article. ' +
+      'ALL distinct Indian geographic locations found in the HEADLINE and content. ' +
+        'Carefully scan the headline first — it often contains city/state names. ' +
+        'Then scan the full content for additional locations. ' +
         'Include every city, state, district, landmark, or neighborhood that is referenced. ' +
-        'Use an empty array only if no specific Indian location can be determined.',
+        'Use an empty array ONLY if no specific Indian location can be determined from either headline or content.',
     ),
   category: z
     .enum([

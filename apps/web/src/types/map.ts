@@ -21,6 +21,8 @@ export interface NewsItemLocation {
 
 export interface MapMarker {
   id: string
+  newsItemId: string
+  cities: string[]
   latitude: number
   longitude: number
   category: NewsCategory
@@ -39,6 +41,7 @@ export interface MapCluster {
   longitude: number
   count: number
   topCategories: NewsCategory[]
+  zoom?: number
   isCluster: true
 }
 

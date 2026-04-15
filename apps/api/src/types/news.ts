@@ -96,6 +96,8 @@ export interface ClusteredViewportQuery extends ViewportQuery {
 
 export interface MapMarker {
   id: string
+  newsItemId: string
+  cities: string[]
   latitude: number
   longitude: number
   category: NewsCategory

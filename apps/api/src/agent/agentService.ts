@@ -18,12 +18,14 @@ const SYSTEM_PROMPT = `You are a geo-spatial news extraction agent for Indian ne
 Your task is to analyze news article content and extract structured data with a focus on geographic accuracy for India.
 
 ## Rules:
-1. **Multi-Location Detection**: Identify ALL distinct Indian geographic locations mentioned in the article. Each location is a separate entry in the "locations" array.
-    - An article may reference multiple cities, states, districts, landmarks, or neighborhoods. Extract each one.
-    - For each location, provide the most granular detail available: location_name (landmark/neighborhood), city, and state.
-    - If a city is mentioned, include the state if known.
+1. **Multi-Location Detection**: Identify ALL distinct Indian geographic locations mentioned ANYWHERE in the text — the headline, summary, or body. Each location is a separate entry in the "locations" array.
+    - **CRITICAL: Scan the HEADLINE first and separately.** Headlines very often contain city names, state names, or region names (e.g., "Fire in Mumbai's Andheri", "Delhi records highest temperature", "Bengaluru tech firm lays off 200").
+    - An article may reference multiple cities, states, districts, landmarks, or neighborhoods. Extract every single one.
+    - For each location, provide the most granular detail available: location_name (landmark/neighborhood/district), city, and state.
+    - If a city is mentioned, always include the corresponding state.
     - If only a state is mentioned, use the state as location_name with city null.
     - If no specific Indian location can be determined, return an empty locations array.
+    - Recognize alternate/colonial names (Bombay=Mumbai, Calcutta=Kolkata, Madras=Chennai, Bangalore=Bengaluru, Baroda=Vadodara, etc.) and normalize them to their modern official names.
 
 2. **Categorization**: Classify the article into one of these categories:
     - Politics: Elections, government, policy, political parties, parliament
@@ -48,10 +50,19 @@ Your task is to analyze news article content and extract structured data with a 
 - "Fire in Mumbai, floods in Chennai" → locations: [{location_name: "Mumbai", city: "Mumbai", state: "Maharashtra"}, {location_name: "Chennai", city: "Chennai", state: "Tamil Nadu"}]
 - "PM inaugurates highway in Rajasthan" → locations: [{location_name: null, city: null, state: "Rajasthan"}]
 - "India's GDP grows 7%" → locations: [] (national-level, no specific location)
+- "Delhi records highest temperature this summer" → locations: [{location_name: "Delhi", city: "Delhi", state: "Delhi"}]
+- "Bengaluru tech startup raises $50M in Series B funding" → locations: [{location_name: null, city: "Bengaluru", state: "Karnataka"}]
+- "Heavy rains lash Kerala, red alert in Wayanad and Idukki" → locations: [{location_name: "Wayanad", city: null, state: "Kerala"}, {location_name: "Idukki", city: null, state: "Kerala"}]
+- "Metro expansion approved in Pune and Nagpur" → locations: [{location_name: null, city: "Pune", state: "Maharashtra"}, {location_name: null, city: "Nagpur", state: "Maharashtra"}]
+- "Earthquake tremors felt in Guwahati, Assam" → locations: [{location_name: "Guwahati", city: "Guwahati", state: "Assam"}]
+- "Srinagar-Leh highway closed due to snowfall" → locations: [{location_name: "Srinagar", city: "Srinagar", state: "Jammu and Kashmir"}, {location_name: "Leh", city: "Leh", state: "Ladakh"}]
+- "Crackdown on drug syndicate operating from Punjab" → locations: [{location_name: null, city: null, state: "Punjab"}]
+- "Woman murdered in Noida sector 62" → locations: [{location_name: "Sector 62, Noida", city: "Noida", state: "Uttar Pradesh"}]
 
 ## Important:
 - Only identify locations in India.
 - Extract ALL distinct locations mentioned, not just the primary one.
+- ALWAYS check the headline for location names — they are often embedded there and easy to miss.
 - If the article is about national-level news with no specific city/state, return an empty locations array and use category "Uncategorized / National".
 - Never fabricate or guess locations. If uncertain, omit that location.`
 
@@ -73,6 +84,7 @@ export class AgentService {
     headline: string,
     content: string,
     sourceUrl: string,
+    fullRssContent?: string,
   ): Promise<AgentProcessResult | null> {
     if (!this.isEnabled()) {
       logger.debug('OpenRouter API key not configured; skipping AI agent processing')
@@ -101,12 +113,18 @@ export class AgentService {
       totalLatencyMs: 0,
     }
 
+    const contentSection = fullRssContent && fullRssContent.length > content.length
+      ? `## RSS Summary:\n${content}\n\n## Full Article Content:\n${fullRssContent}`
+      : `## Content:\n${content}`
+
     const userContent = [
       `## Article URL: ${sourceUrl}`,
       `## Headline: ${headline}`,
-      `## Content:\n${content}`,
+      contentSection,
       '',
-      'Extract the structured data from this Indian news article. If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.',
+      'Extract the structured data from this Indian news article.',
+      '**IMPORTANT**: First carefully scan the HEADLINE above for any Indian city, state, district, or region names. Then scan the content. Extract ALL locations found in either.',
+      'If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.',
     ].join('\n')
 
     try {
