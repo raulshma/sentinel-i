@@ -49,7 +49,7 @@ function useClusterArticles(feature: MapFeature | null, hours: number) {
       setIsLoading(true)
       try {
         const zoom = feature.zoom ?? 4
-        const radiusMeters = Math.max(5000, Math.round(400000 / Math.pow(2, zoom - 4)))
+        const radiusMeters = Math.min(500000, Math.max(5000, Math.round(400000 / Math.pow(2, zoom - 4))))
 
         const params = new URLSearchParams({
           longitude: feature.longitude.toString(),
