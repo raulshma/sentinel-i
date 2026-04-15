@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
+import { getSocket } from '../lib/socket'
 
 type RealtimeStatsResponse = {
   data: {
@@ -12,7 +12,6 @@ type RealtimeStatsResponse = {
 type ConnectionMode = 'websocket' | 'polling'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
-const SOCKET_BASE_URL = import.meta.env.VITE_SOCKET_URL
 const DEFAULT_POLL_INTERVAL_MS = 15_000
 
 export const useRealtimeStats = () => {
@@ -58,41 +57,44 @@ export const useRealtimeStats = () => {
       pollIntervalRef.current = null
     }
 
-    const socket = io(SOCKET_BASE_URL ?? window.location.origin, {
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      withCredentials: true,
-      timeout: 5_000,
-    })
+    const socket = getSocket()
 
-    socket.on('connect', () => {
+    const onConnect = () => {
       setIsSocketConnected(true)
       setMode('websocket')
       stopPolling()
       void fetchStats()
-    })
+    }
 
-    socket.on('disconnect', () => {
+    const onDisconnect = () => {
       setIsSocketConnected(false)
       setMode('polling')
       startPolling()
-    })
+    }
 
-    socket.on('connect_error', () => {
+    const onConnectError = () => {
       setIsSocketConnected(false)
       setMode('polling')
       startPolling()
-    })
+    }
 
-    socket.on('presence:user-count', (payload: { connectedUsers: number }) => {
+    const onPresence = (payload: { connectedUsers: number }) => {
       setConnectedUsers(payload.connectedUsers)
-    })
+    }
+
+    socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    socket.on('connect_error', onConnectError)
+    socket.on('presence:user-count', onPresence)
 
     startPolling()
 
     return () => {
       stopPolling()
-      socket.close()
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+      socket.off('connect_error', onConnectError)
+      socket.off('presence:user-count', onPresence)
     }
   }, [fetchStats])
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
+import { getSocket } from '../lib/socket'
 
 import type { NationalItem } from '../types/map'
 import type {
@@ -9,7 +9,6 @@ import type {
 } from '../types/map'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
-const SOCKET_BASE_URL = import.meta.env.VITE_SOCKET_URL
 const DEBOUNCE_MS = 350
 
 type IncomingSocketItem = NationalItem & {
@@ -112,14 +111,9 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   }, [hours, categories, fetchViewport])
 
   useEffect(() => {
-    const socket = io(SOCKET_BASE_URL ?? window.location.origin, {
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      withCredentials: true,
-      timeout: 5_000,
-    })
+    const socket = getSocket()
 
-    socket.on('news:created', (item: IncomingSocketItem) => {
+    const onNewsCreated = (item: IncomingSocketItem) => {
       if (item.isNational || item.latitude === null || item.longitude === null) {
         setNationalItems((prev) => {
           if (prev.some((n) => n.id === item.id)) return prev
@@ -148,10 +142,12 @@ export const useMapData = (hours = 24, categories?: string[]) => {
           ...prev,
         ].slice(0, 500)
       })
-    })
+    }
+
+    socket.on('news:created', onNewsCreated)
 
     return () => {
-      socket.close()
+      socket.off('news:created', onNewsCreated)
     }
   }, [])
 

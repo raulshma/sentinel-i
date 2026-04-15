@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { getSocket } from '../lib/socket'
 
 export type ProcessingStage =
   | 'feed_fetch'
@@ -32,7 +32,6 @@ export interface ProcessingLogEntry {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
-const SOCKET_BASE_URL = import.meta.env.VITE_SOCKET_URL
 const MAX_LOG_ENTRIES = 500
 
 function mergeStreamingEntry(
@@ -57,7 +56,6 @@ export const useProcessingLogs = () => {
   const [isConnected, setIsConnected] = useState(false)
   const [nextSyncAt, setNextSyncAt] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
-  const socketRef = useRef<ReturnType<typeof io> | null>(null)
 
   const fetchDevToolsStatus = useCallback(async () => {
     try {
@@ -110,33 +108,35 @@ export const useProcessingLogs = () => {
       void fetchDevToolsStatus()
     }, 30_000)
 
-    const socket = io(SOCKET_BASE_URL ?? window.location.origin, {
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      withCredentials: true,
-      timeout: 5_000,
-    })
+    const socket = getSocket()
 
-    socketRef.current = socket
-
-    socket.on('connect', () => {
+    const onConnect = () => {
       setIsConnected(true)
-    })
+    }
 
-    socket.on('disconnect', () => {
+    const onDisconnect = () => {
       setIsConnected(false)
-    })
+    }
 
-    socket.on('processing:log', (entry: ProcessingLogEntry) => {
+    const onProcessingLog = (entry: ProcessingLogEntry) => {
       setIsEnabled(true)
       setLogs((prev) => mergeStreamingEntry(prev, entry))
-    })
+    }
+
+    socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    socket.on('processing:log', onProcessingLog)
+
+    if (socket.connected) {
+      setIsConnected(true)
+    }
 
     return () => {
       cancelled = true
       clearInterval(pollInterval)
-      socket.close()
-      socketRef.current = null
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+      socket.off('processing:log', onProcessingLog)
     }
   }, [fetchDevToolsStatus])
 
