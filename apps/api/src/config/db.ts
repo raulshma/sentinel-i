@@ -1,11 +1,15 @@
+import { sql } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 
 import { env } from './env.js'
 import { logger } from './logger.js'
+import * as schema from '../db/schema.js'
 
 let pool: Pool | null = null
+let db: ReturnType<typeof drizzle<typeof schema>> | null = null
 
-export const getPgPool = (): Pool => {
+const getPool = (): Pool => {
   if (!pool) {
     pool = new Pool({
       connectionString: env.DATABASE_URL,
@@ -22,17 +26,21 @@ export const getPgPool = (): Pool => {
   return pool
 }
 
-export const pingDatabase = async (): Promise<boolean> => {
-  const client = await getPgPool().connect()
+export const getDb = () => {
+  if (!db) {
+    db = drizzle(getPool(), { schema })
+  }
 
+  return db
+}
+
+export const pingDatabase = async (): Promise<boolean> => {
   try {
-    await client.query('SELECT 1')
+    await getDb().execute(sql`SELECT 1`)
     return true
   } catch (error) {
     logger.warn({ error }, 'PostgreSQL health check failed')
     return false
-  } finally {
-    client.release()
   }
 }
 
@@ -40,5 +48,6 @@ export const closePgPool = async (): Promise<void> => {
   if (pool) {
     await pool.end()
     pool = null
+    db = null
   }
 }

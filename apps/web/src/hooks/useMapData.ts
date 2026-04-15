@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSocket } from '../lib/socket'
 
-import type { NationalItem } from '../types/map'
+import type { NationalItem, NewsItemLocation } from '../types/map'
 import type {
   ClusteredViewportResponse,
   MapFeature,
@@ -11,15 +11,13 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const DEBOUNCE_MS = 350
 
-type IncomingSocketItem = NationalItem & {
-  latitude: number | null
-  longitude: number | null
+type SocketArticle = NationalItem & {
   isNational: boolean
-  summary?: string
-  sourceUrl?: string
-  city?: string | null
-  state?: string | null
-  publishedAt?: string
+}
+
+type SocketPayload = {
+  article: SocketArticle
+  locations: NewsItemLocation[]
 }
 
 export const useMapData = (hours = 24, categories?: string[]) => {
@@ -113,35 +111,44 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   useEffect(() => {
     const socket = getSocket()
 
-    const onNewsCreated = (item: IncomingSocketItem) => {
-      if (item.isNational || item.latitude === null || item.longitude === null) {
+    const onNewsCreated = (payload: SocketPayload) => {
+      const { article, locations } = payload
+
+      if (article.isNational || locations.length === 0) {
         setNationalItems((prev) => {
-          if (prev.some((n) => n.id === item.id)) return prev
-          return [item, ...prev].slice(0, 100)
+          if (prev.some((n) => n.id === article.id)) return prev
+          return [article, ...prev].slice(0, 100)
         })
-        return
       }
 
-      setFeatures((prev) => {
-        if (prev.some((f) => f.id === item.id)) return prev
+      const geocodedLocations = locations.filter(
+        (loc) => loc.latitude !== null && loc.longitude !== null,
+      )
 
-        return [
-          {
-            id: item.id,
-            latitude: item.latitude!,
-            longitude: item.longitude!,
-            category: item.category,
-            headline: item.headline,
-            summary: item.summary ?? '',
-            sourceUrl: item.sourceUrl ?? '',
-            city: item.city ?? null,
-            state: item.state ?? null,
-            publishedAt: item.publishedAt ?? new Date().toISOString(),
+      if (geocodedLocations.length > 0) {
+        setFeatures((prev) => {
+          const newMarkers: MapFeature[] = geocodedLocations.map((loc) => ({
+            id: loc.id,
+            latitude: loc.latitude!,
+            longitude: loc.longitude!,
+            category: article.category,
+            headline: article.headline,
+            summary: article.summary,
+            sourceUrl: article.sourceUrl,
+            city: loc.city,
+            state: loc.state,
+            publishedAt: article.publishedAt,
             isCluster: false as const,
-          },
-          ...prev,
-        ].slice(0, 500)
-      })
+          }))
+
+          const existingIds = new Set(prev.map((f) => f.id))
+          const uniqueNew = newMarkers.filter((m) => !existingIds.has(m.id))
+
+          if (uniqueNew.length === 0) return prev
+
+          return [...uniqueNew, ...prev].slice(0, 500)
+        })
+      }
     }
 
     socket.on('news:created', onNewsCreated)

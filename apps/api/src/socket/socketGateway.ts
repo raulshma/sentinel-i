@@ -7,7 +7,7 @@ import { env } from '../config/env.js'
 import { isDevToolsEnabled } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { processingEventBus, type ProcessingLogEntry } from '../services/processingEventBus.js'
-import type { NewsItem } from '../types/news.js'
+import type { NewsItem, NewsItemLocation } from '../types/news.js'
 
 class SocketGateway extends EventEmitter {
   private io?: Server
@@ -56,8 +56,8 @@ class SocketGateway extends EventEmitter {
     return this.connectedUsers
   }
 
-  publishNewsCreated(item: NewsItem): void {
-    this.io?.emit('news:created', item)
+  publishNewsCreated(item: NewsItem, locations: NewsItemLocation[]): void {
+    this.io?.emit('news:created', { article: item, locations })
   }
 
   publishProcessingLog(entry: ProcessingLogEntry): void {

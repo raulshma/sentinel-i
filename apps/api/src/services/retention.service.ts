@@ -1,34 +1,11 @@
-import { getPgPool } from '../config/db.js'
+import { sql } from 'drizzle-orm'
+
+import { getDb } from '../config/db.js'
 import { logger } from '../config/logger.js'
+import { newsItems, ingestionRuns } from '../db/schema.js'
 
 const ARCHIVE_THRESHOLD_HOURS = 72
 const DELETE_THRESHOLD_HOURS = 720
-
-const COUNT_OLD_ITEMS_SQL = `
-  SELECT
-    COUNT(*) FILTER (WHERE published_at < NOW() - make_interval(hours => $1::int)
-                     AND published_at >= NOW() - make_interval(hours => $2::int)) AS archivable,
-    COUNT(*) FILTER (WHERE published_at < NOW() - make_interval(hours => $2::int)) AS deletable
-  FROM news_items;
-`
-
-const FLAG_ARCHIVED_SQL = `
-  UPDATE news_items
-  SET is_national = is_national
-  WHERE published_at < NOW() - make_interval(hours => $1::int)
-    AND published_at >= NOW() - make_interval(hours => $2::int)
-    AND (category NOT LIKE '%Archived%');
-`
-
-const DELETE_OLD_SQL = `
-  DELETE FROM news_items
-  WHERE published_at < NOW() - make_interval(hours => $1::int);
-`
-
-const DELETE_OLD_INGESTION_RUNS_SQL = `
-  DELETE FROM ingestion_runs
-  WHERE started_at < NOW() - make_interval(hours => $1::int);
-`
 
 export interface RetentionResult {
   archivedCount: number
@@ -46,35 +23,46 @@ export class RetentionService {
       ranAt: new Date().toISOString(),
     }
 
-    const pool = getPgPool()
+    const db = getDb()
 
     try {
-      const countResult = await pool.query<{
-        archivable: string
-        deletable: string
-      }>(COUNT_OLD_ITEMS_SQL, [ARCHIVE_THRESHOLD_HOURS, DELETE_THRESHOLD_HOURS])
+      const countResult = await db.execute(sql`
+        SELECT
+          COUNT(*) FILTER (WHERE published_at < NOW() - make_interval(hours => ${ARCHIVE_THRESHOLD_HOURS}::int)
+                           AND published_at >= NOW() - make_interval(hours => ${DELETE_THRESHOLD_HOURS}::int)) AS archivable,
+          COUNT(*) FILTER (WHERE published_at < NOW() - make_interval(hours => ${DELETE_THRESHOLD_HOURS}::int)) AS deletable
+        FROM ${newsItems}
+      `)
 
-      const archivable = Number(countResult.rows[0]?.archivable ?? 0)
-      const deletable = Number(countResult.rows[0]?.deletable ?? 0)
+      const row = countResult.rows[0]!
+      const archivable = Number(row.archivable ?? 0)
+      const deletable = Number(row.deletable ?? 0)
 
       logger.info({ archivable, deletable }, 'Retention cycle starting')
 
       if (archivable > 0) {
-        const archiveResult = await pool.query(FLAG_ARCHIVED_SQL, [
-          ARCHIVE_THRESHOLD_HOURS,
-          DELETE_THRESHOLD_HOURS,
-        ])
+        const archiveResult = await db.execute(sql`
+          UPDATE ${newsItems}
+          SET is_national = is_national
+          WHERE published_at < NOW() - make_interval(hours => ${ARCHIVE_THRESHOLD_HOURS}::int)
+            AND published_at >= NOW() - make_interval(hours => ${DELETE_THRESHOLD_HOURS}::int)
+            AND (category NOT LIKE '%Archived%')
+        `)
         result.archivedCount = archiveResult.rowCount ?? 0
       }
 
       if (deletable > 0) {
-        const deleteResult = await pool.query(DELETE_OLD_SQL, [DELETE_THRESHOLD_HOURS])
+        const deleteResult = await db.execute(sql`
+          DELETE FROM ${newsItems}
+          WHERE published_at < NOW() - make_interval(hours => ${DELETE_THRESHOLD_HOURS}::int)
+        `)
         result.deletedCount = deleteResult.rowCount ?? 0
       }
 
-      const deleteRunsResult = await pool.query(DELETE_OLD_INGESTION_RUNS_SQL, [
-        DELETE_THRESHOLD_HOURS,
-      ])
+      const deleteRunsResult = await db.execute(sql`
+        DELETE FROM ${ingestionRuns}
+        WHERE started_at < NOW() - make_interval(hours => ${DELETE_THRESHOLD_HOURS}::int)
+      `)
       result.deletedRunsCount = deleteRunsResult.rowCount ?? 0
 
       logger.info(result, 'Retention cycle completed')

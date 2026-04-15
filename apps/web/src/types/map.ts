@@ -9,6 +9,16 @@ export type NewsCategory =
   | 'General'
   | 'Uncategorized / National'
 
+export interface NewsItemLocation {
+  id: string
+  locationName: string | null
+  city: string | null
+  state: string | null
+  isPrimary: boolean
+  latitude: number | null
+  longitude: number | null
+}
+
 export interface MapMarker {
   id: string
   latitude: number

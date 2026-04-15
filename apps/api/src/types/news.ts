@@ -17,14 +17,53 @@ export interface NewsItem {
   headline: string
   summary: string
   sourceUrl: string
+  category: NewsCategory
+  isNational: boolean
+  publishedAt: string
+}
+
+export interface NewsItemLocation {
+  id: string
+  newsItemId: string
   locationName: string | null
   city: string | null
   state: string | null
-  category: NewsCategory
+  isPrimary: boolean
   latitude: number | null
   longitude: number | null
+}
+
+export interface NationalItem {
+  id: string
+  headline: string
+  summary: string
+  sourceUrl: string
+  category: NewsCategory
+  publishedAt: string
+}
+
+export interface CreateLocationInput {
+  locationName: string | null
+  city: string | null
+  state: string | null
+  isPrimary: boolean
+  latitude: number | null
+  longitude: number | null
+}
+
+export interface CreateNewsItemInput {
+  sourceUrl: string
+  headline: string
+  summary: string
+  category: NewsCategory
   isNational: boolean
   publishedAt: string
+  locations: CreateLocationInput[]
+}
+
+export interface CreateNewsItemResult {
+  item: NewsItem
+  locations: NewsItemLocation[]
 }
 
 export interface ViewportQuery {
@@ -40,20 +79,6 @@ export interface RealtimeStats {
   connectedUsers: number
   websocketEnabled: boolean
   fallbackPollingIntervalMs: number
-}
-
-export interface CreateNewsItemInput {
-  sourceUrl: string
-  headline: string
-  summary: string
-  category: NewsCategory
-  locationName: string | null
-  city: string | null
-  state: string | null
-  isNational: boolean
-  latitude: number | null
-  longitude: number | null
-  publishedAt: string
 }
 
 export interface IngestionRunInput {
@@ -96,7 +121,7 @@ export type MapFeature = MapMarker | MapCluster
 
 export interface ClusteredViewportResponse {
   features: MapFeature[]
-  nationalItems: NewsItem[]
+  nationalItems: NationalItem[]
   meta: {
     totalFeatures: number
     nationalCount: number

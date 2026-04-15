@@ -1,38 +1,38 @@
 import {
   newsRepository,
   type NewsRepository,
-} from "../repositories/news.repository.js";
-import { cacheService } from "./cache.service.js";
-import { socketGateway } from "../socket/socketGateway.js";
+} from '../repositories/news.repository.js'
+import { cacheService } from './cache.service.js'
+import { socketGateway } from '../socket/socketGateway.js'
 import type {
   ClusteredViewportQuery,
   ClusteredViewportResponse,
-  NewsItem,
+  MapMarker,
   RealtimeStats,
   ViewportQuery,
-} from "../types/news.js";
+} from '../types/news.js'
 
 export class NewsService {
   constructor(private readonly repository: NewsRepository = newsRepository) {}
 
-  async getViewportNews(viewport: ViewportQuery): Promise<NewsItem[]> {
-    return this.repository.findByViewport(viewport);
+  async getViewportNews(viewport: ViewportQuery): Promise<MapMarker[]> {
+    return this.repository.findByViewport(viewport)
   }
 
   async getClusteredViewport(
     query: ClusteredViewportQuery,
   ): Promise<ClusteredViewportResponse> {
     const cached = await cacheService.getViewport<ClusteredViewportResponse>({
-      endpoint: "clustered-viewport",
+      endpoint: 'clustered-viewport',
       ...query,
-    });
+    })
 
     if (cached) {
-      return cached;
+      return cached
     }
 
     const { features, nationalItems } =
-      await this.repository.findClusteredViewport(query);
+      await this.repository.findClusteredViewport(query)
 
     const response: ClusteredViewportResponse = {
       features,
@@ -42,14 +42,14 @@ export class NewsService {
         nationalCount: nationalItems.length,
         query,
       },
-    };
+    }
 
     await cacheService.setViewport(
-      { endpoint: "clustered-viewport", ...query },
+      { endpoint: 'clustered-viewport', ...query },
       response,
-    );
+    )
 
-    return response;
+    return response
   }
 
   getRealtimeStats(): RealtimeStats {
@@ -57,7 +57,7 @@ export class NewsService {
       connectedUsers: socketGateway.getConnectedUsers(),
       websocketEnabled: true,
       fallbackPollingIntervalMs: 15_000,
-    };
+    }
   }
 
   async getClusterArticles(
@@ -66,18 +66,18 @@ export class NewsService {
     radiusMeters: number,
     limit: number,
     hours: number,
-  ): Promise<NewsItem[]> {
-    const cached = await cacheService.getViewport<NewsItem[]>({
-      endpoint: "cluster-articles",
+  ): Promise<MapMarker[]> {
+    const cached = await cacheService.getViewport<MapMarker[]>({
+      endpoint: 'cluster-articles',
       longitude,
       latitude,
       radiusMeters,
       limit,
       hours,
-    });
+    })
 
     if (cached) {
-      return cached;
+      return cached
     }
 
     const articles = await this.repository.findClusterArticles(
@@ -86,11 +86,11 @@ export class NewsService {
       radiusMeters,
       limit,
       hours,
-    );
+    )
 
     await cacheService.setViewport(
       {
-        endpoint: "cluster-articles",
+        endpoint: 'cluster-articles',
         longitude,
         latitude,
         radiusMeters,
@@ -99,14 +99,14 @@ export class NewsService {
       },
       articles,
       60,
-    );
+    )
 
-    return articles;
+    return articles
   }
 
   async invalidateCache(): Promise<void> {
-    await cacheService.invalidateViewport();
+    await cacheService.invalidateViewport()
   }
 }
 
-export const newsService = new NewsService();
+export const newsService = new NewsService()

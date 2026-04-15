@@ -10,7 +10,7 @@ import {
   type NewsRepository,
 } from '../repositories/news.repository.js'
 import { socketGateway } from '../socket/socketGateway.js'
-import type { NewsCategory } from '../types/news.js'
+import type { NewsCategory, CreateLocationInput } from '../types/news.js'
 import { contentFetchService, type FetchArticleContentOutput } from './contentFetch.service.js'
 import { geocodeService } from './geocode.service.js'
 import { processingEventBus } from './processingEventBus.js'
@@ -40,6 +40,7 @@ export interface RssIngestionSummary {
   inserted: number
   duplicateCount: number
   nationalCount: number
+  locationCount: number
   errorCount: number
   startedAt: string
   finishedAt: string
@@ -215,47 +216,40 @@ const escapeRegExp = (value: string): string => {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-const findFirstMention = (text: string, values: readonly string[]): string | null => {
+const findAllMentions = (text: string, values: readonly string[]): string[] => {
+  const found: string[] = []
   for (const value of values) {
     const pattern = new RegExp(`\\b${escapeRegExp(value)}\\b`, 'i')
-
     if (pattern.test(text)) {
-      return value
+      found.push(value)
     }
   }
-
-  return null
+  return found
 }
 
-const inferLocation = (text: string): {
+const inferLocations = (text: string): Array<{
   locationName: string | null
   city: string | null
   state: string | null
-} => {
-  const city = findFirstMention(text, MAJOR_CITIES)
-  const state = findFirstMention(text, INDIAN_STATES)
+}> => {
+  const cities = findAllMentions(text, MAJOR_CITIES)
+  const states = findAllMentions(text, INDIAN_STATES)
 
-  if (city) {
-    return {
-      locationName: city,
-      city,
-      state,
-    }
+  const locations: Array<{
+    locationName: string | null
+    city: string | null
+    state: string | null
+  }> = []
+
+  for (const city of cities) {
+    locations.push({ locationName: city, city, state: null })
   }
 
-  if (state) {
-    return {
-      locationName: state,
-      city: null,
-      state,
-    }
+  for (const state of states) {
+    locations.push({ locationName: state, city: null, state })
   }
 
-  return {
-    locationName: null,
-    city: null,
-    state: null,
-  }
+  return locations
 }
 
 const categorizeArticle = (text: string): NewsCategory => {
@@ -305,6 +299,7 @@ export class RssIngestionService {
       inserted: 0,
       duplicateCount: 0,
       nationalCount: 0,
+      locationCount: 0,
       errorCount: 0,
       startedAt: startedAt.toISOString(),
       finishedAt: startedAt.toISOString(),
@@ -418,9 +413,10 @@ export class RssIngestionService {
       const agentResult = await agentService.processArticle(headline, rawSummary, sourceUrl)
 
       if (agentResult) {
-        this.log(sourceUrl, headline, 'ai_processing', `AI agent extracted: category=${agentResult.extraction.category}, city=${agentResult.extraction.city ?? 'N/A'}, state=${agentResult.extraction.state ?? 'N/A'}`, 'success', {
+        this.log(sourceUrl, headline, 'ai_processing', `AI agent extracted: category=${agentResult.extraction.category}, locations=${agentResult.extraction.locations.length}`, 'success', {
           decisionPath: agentResult.audit.decisionPath,
           latencyMs: agentResult.audit.totalLatencyMs,
+          locationCount: agentResult.extraction.locations.length,
         })
         await this.processWithAgentExtraction(
           agentResult.extraction,
@@ -483,28 +479,46 @@ export class RssIngestionService {
     fingerprint: HeadlineFingerprint,
     item: RssItem,
   ): Promise<void> {
-    const isNational =
-      !extraction.location_name && !extraction.city && !extraction.state
+    const locations: CreateLocationInput[] = []
+    let anyGeocoded = false
 
-    let latitude: number | null = null
-    let longitude: number | null = null
+    let isFirst = true
 
-    if (!isNational && (extraction.location_name || extraction.city || extraction.state)) {
-      this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding: ${extraction.location_name ?? extraction.city ?? extraction.state}`, 'start')
-      const coordinates = await geocodeService.forwardGeocode({
-        locationName: extraction.location_name ?? extraction.city ?? extraction.state ?? '',
-        city: extraction.city,
-        state: extraction.state,
-      })
+    for (const loc of extraction.locations) {
+      let latitude: number | null = null
+      let longitude: number | null = null
 
-      if (coordinates) {
-        latitude = coordinates.latitude
-        longitude = coordinates.longitude
-        this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
-      } else {
-        this.log(sourceUrl, extraction.headline, 'geocoding', 'Geocoding returned no coordinates', 'warn')
+      if (loc.location_name || loc.city || loc.state) {
+        this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding location: ${loc.location_name ?? loc.city ?? loc.state}`, 'start')
+        const coordinates = await geocodeService.forwardGeocode({
+          locationName: loc.location_name ?? loc.city ?? loc.state ?? '',
+          city: loc.city,
+          state: loc.state,
+        })
+
+        if (coordinates) {
+          latitude = coordinates.latitude
+          longitude = coordinates.longitude
+          anyGeocoded = true
+          this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
+        } else {
+          this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding returned no coordinates for: ${loc.location_name ?? loc.city ?? loc.state}`, 'warn')
+        }
       }
+
+      locations.push({
+        locationName: loc.location_name,
+        city: loc.city,
+        state: loc.state,
+        isPrimary: isFirst,
+        latitude,
+        longitude,
+      })
+      isFirst = false
     }
+
+    const hasLocations = extraction.locations.length > 0
+    const isNational = !hasLocations || !anyGeocoded
 
     const category: NewsCategory = isNational
       ? 'Uncategorized / National'
@@ -512,23 +526,19 @@ export class RssIngestionService {
         ? 'General'
         : extraction.category
 
-    this.log(sourceUrl, extraction.headline, 'storage', 'Storing news item in database', 'start')
+    this.log(sourceUrl, extraction.headline, 'storage', `Storing news item with ${locations.length} location(s) in database`, 'start')
 
-    const createdNewsItem = await this.repository.createNewsItem({
+    const result = await this.repository.createNewsItem({
       sourceUrl,
       headline: extraction.headline,
       summary: extraction.summary.length > 0 ? extraction.summary : rawSummary,
       category,
-      locationName: isNational ? null : extraction.location_name,
-      city: isNational ? null : extraction.city,
-      state: isNational ? null : extraction.state,
       isNational,
-      latitude,
-      longitude,
       publishedAt: resolvePublishedAt(item),
+      locations,
     })
 
-    if (!createdNewsItem) {
+    if (!result) {
       summary.duplicateCount += 1
 
       this.log(sourceUrl, extraction.headline, 'storage', 'Skipped: insert conflict', 'warn')
@@ -544,17 +554,22 @@ export class RssIngestionService {
       return
     }
 
-    this.log(sourceUrl, extraction.headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : ` - ${extraction.city ?? extraction.state ?? ''}`}`, 'success')
+    const locationSummary = result.locations.length > 0
+      ? ` - ${result.locations.map((l) => l.city ?? l.state ?? l.locationName ?? 'unknown').join(', ')}`
+      : ''
+
+    this.log(sourceUrl, extraction.headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : locationSummary} (${result.locations.length} location(s))`, 'success')
 
     summary.inserted += 1
+    summary.locationCount += result.locations.length
 
-    if (createdNewsItem.isNational) {
+    if (result.item.isNational) {
       summary.nationalCount += 1
     }
 
     dedupeFingerprints.push(fingerprint)
     await cacheService.markProcessed(sourceUrl)
-    socketGateway.publishNewsCreated(createdNewsItem)
+    socketGateway.publishNewsCreated(result.item, result.locations)
 
     await this.repository.recordIngestionRun({
       feedUrl,
@@ -590,53 +605,61 @@ export class RssIngestionService {
 
     const fullText = normalizeText(`${headline} ${fetchResult.content}`)
     const baseCategory = categorizeArticle(fullText)
-    const location = inferLocation(fullText)
+    const extractedLocations = inferLocations(fullText)
 
-    let latitude: number | null = null
-    let longitude: number | null = null
-    let isNational = false
-    let category: NewsCategory = baseCategory
+    const locations: CreateLocationInput[] = []
+    let anyGeocoded = false
 
-    if (location.locationName) {
-      this.log(sourceUrl, headline, 'geocoding', `Geocoding: ${location.locationName}`, 'start')
+    let isFirst = true
+
+    for (const loc of extractedLocations) {
+      let latitude: number | null = null
+      let longitude: number | null = null
+
+      this.log(sourceUrl, headline, 'geocoding', `Geocoding location: ${loc.locationName}`, 'start')
       const coordinates = await geocodeService.forwardGeocode({
-        locationName: location.locationName,
-        city: location.city,
-        state: location.state,
+        locationName: loc.locationName ?? '',
+        city: loc.city,
+        state: loc.state,
       })
 
       if (coordinates) {
         latitude = coordinates.latitude
         longitude = coordinates.longitude
+        anyGeocoded = true
         this.log(sourceUrl, headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
       } else {
-        isNational = true
+        this.log(sourceUrl, headline, 'geocoding', `Geocoding returned no coordinates for: ${loc.locationName}`, 'warn')
       }
-    } else {
-      isNational = true
+
+      locations.push({
+        locationName: loc.locationName,
+        city: loc.city,
+        state: loc.state,
+        isPrimary: isFirst,
+        latitude,
+        longitude,
+      })
+      isFirst = false
     }
 
-    if (isNational) {
-      category = 'Uncategorized / National'
-    }
+    const hasLocations = extractedLocations.length > 0
+    const isNational = !hasLocations || !anyGeocoded
+    const category: NewsCategory = isNational ? 'Uncategorized / National' : baseCategory
 
-    this.log(sourceUrl, headline, 'storage', 'Storing news item in database', 'start')
+    this.log(sourceUrl, headline, 'storage', `Storing news item with ${locations.length} location(s) in database`, 'start')
 
-    const createdNewsItem = await this.repository.createNewsItem({
+    const result = await this.repository.createNewsItem({
       sourceUrl,
       headline,
       summary: fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
       category,
-      locationName: isNational ? null : location.locationName,
-      city: isNational ? null : location.city,
-      state: isNational ? null : location.state,
       isNational,
-      latitude,
-      longitude,
       publishedAt: resolvePublishedAt(item),
+      locations,
     })
 
-    if (!createdNewsItem) {
+    if (!result) {
       summary.duplicateCount += 1
 
       this.log(sourceUrl, headline, 'storage', 'Skipped: insert conflict', 'warn')
@@ -653,16 +676,17 @@ export class RssIngestionService {
     }
 
     summary.inserted += 1
+    summary.locationCount += result.locations.length
 
-    if (createdNewsItem.isNational) {
+    if (result.item.isNational) {
       summary.nationalCount += 1
     }
 
-    this.log(sourceUrl, headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : ` - ${location.locationName ?? ''}`}`, 'success')
+    this.log(sourceUrl, headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : ` - ${locations.length} location(s)`}`, 'success')
 
     dedupeFingerprints.push(fingerprint)
     await cacheService.markProcessed(sourceUrl)
-    socketGateway.publishNewsCreated(createdNewsItem)
+    socketGateway.publishNewsCreated(result.item, result.locations)
 
     await this.repository.recordIngestionRun({
       feedUrl,

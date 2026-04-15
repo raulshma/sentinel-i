@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
 
+import { getDb } from '../config/db.js'
+import { processingLogs } from '../db/schema.js'
+
 export type ProcessingStage =
   | 'feed_fetch'
   | 'feed_parse'
@@ -62,21 +65,19 @@ class ProcessingEventBus extends EventEmitter {
     const batch = this.queue.splice(0, this.queue.length)
 
     try {
-      const { getPgPool } = await import('../config/db.js')
+      const db = getDb()
 
-      const values = batch.map(
-        (e) =>
-          `(${escapeSql(e.sourceUrl)}, ${escapeSql(e.headline)}, ${escapeSql(e.stage)}, ${escapeSql(e.message)}, ${escapeSql(e.status)}, '${JSON.stringify(e.metadata ?? {}).replace(/'/g, "''")}')`,
+      await db.insert(processingLogs).values(
+        batch.map((e) => ({
+          sourceUrl: e.sourceUrl,
+          headline: e.headline,
+          stage: e.stage,
+          message: e.message,
+          status: e.status,
+          metadata: e.metadata ?? {},
+        })),
       )
-
-      const sql = `
-        INSERT INTO processing_logs (source_url, headline, stage, message, status, metadata)
-        VALUES ${values.join(', ')}
-      `
-
-      await getPgPool().query(sql)
     } catch {
-      // Swallow - live updates logging should never block processing
     } finally {
       this.flushing = false
 
@@ -85,11 +86,6 @@ class ProcessingEventBus extends EventEmitter {
       }
     }
   }
-}
-
-function escapeSql(value: string | null): string {
-  if (value === null) return 'NULL'
-  return `'${value.replace(/'/g, "''").replace(/\\/g, '\\\\')}'`
 }
 
 export const processingEventBus = new ProcessingEventBus()

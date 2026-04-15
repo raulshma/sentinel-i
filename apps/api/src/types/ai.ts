@@ -1,20 +1,30 @@
 import { z } from 'zod'
 
-export const newsExtractionSchema = z.object({
+export const locationExtractionSchema = z.object({
   location_name: z
     .string()
     .describe(
-      'Specific landmark, neighborhood, or district mentioned in the article. Null if not locally specific.',
+      'Specific landmark, neighborhood, or district mentioned. Null if not locally specific.',
     )
     .nullable(),
   city: z
     .string()
-    .describe('City name if found in the article. Null if not mentioned.')
+    .describe('City name if found. Null if not mentioned.')
     .nullable(),
   state: z
     .string()
     .describe('Indian state or union territory. Null if not mentioned.')
     .nullable(),
+})
+
+export const newsExtractionSchema = z.object({
+  locations: z
+    .array(locationExtractionSchema)
+    .describe(
+      'All distinct Indian geographic locations mentioned in the article. ' +
+        'Include every city, state, district, landmark, or neighborhood that is referenced. ' +
+        'Use an empty array only if no specific Indian location can be determined.',
+    ),
   category: z
     .enum([
       'Politics',

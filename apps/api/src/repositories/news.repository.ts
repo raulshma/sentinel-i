@@ -1,207 +1,26 @@
-import { getPgPool } from '../config/db.js'
+import { eq, sql, and, desc, gte } from 'drizzle-orm'
+
+import { getDb } from '../config/db.js'
 import { logger } from '../config/logger.js'
+import {
+  newsItems,
+  newsItemLocations,
+  ingestionRuns,
+} from '../db/schema.js'
 import {
   type ClusteredViewportQuery,
   type CreateNewsItemInput,
+  type CreateNewsItemResult,
   type IngestionRunInput,
   isNewsCategory,
   type MapCluster,
   type MapFeature,
   type MapMarker,
+  type NationalItem,
   type NewsCategory,
-  type NewsItem,
+  type NewsItemLocation,
   type ViewportQuery,
 } from '../types/news.js'
-
-type NewsRow = {
-  id: string
-  headline: string
-  summary: string
-  source_url: string
-  location_name: string | null
-  city: string | null
-  state: string | null
-  category: string
-  latitude: string | null
-  longitude: string | null
-  is_national: boolean
-  published_at: Date
-}
-
-type HeadlineRow = {
-  headline: string
-}
-
-const VIEWPORT_SQL = `
-  SELECT
-    id,
-    headline,
-    summary,
-    source_url,
-    location_name,
-    city,
-    state,
-    category,
-    CASE WHEN geom IS NULL THEN NULL ELSE ST_Y(geom::geometry)::text END AS latitude,
-    CASE WHEN geom IS NULL THEN NULL ELSE ST_X(geom::geometry)::text END AS longitude,
-    is_national,
-    published_at
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $5::int)
-    AND (
-      is_national = TRUE
-      OR geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-    )
-  ORDER BY published_at DESC
-  LIMIT 300;
-`
-
-const INSERT_NEWS_ITEM_SQL = `
-  INSERT INTO news_items (
-    source_url,
-    headline,
-    summary,
-    category,
-    location_name,
-    city,
-    state,
-    is_national,
-    geom,
-    published_at
-  )
-  VALUES (
-    $1,
-    $2,
-    $3,
-    $4,
-    $5,
-    $6,
-    $7,
-    $8,
-    CASE
-      WHEN $9::double precision IS NULL OR $10::double precision IS NULL THEN NULL
-      ELSE ST_SetSRID(ST_MakePoint($10::double precision, $9::double precision), 4326)::geography
-    END,
-    $11::timestamptz
-  )
-  ON CONFLICT (source_url) DO NOTHING
-  RETURNING
-    id,
-    headline,
-    summary,
-    source_url,
-    location_name,
-    city,
-    state,
-    category,
-    CASE WHEN geom IS NULL THEN NULL ELSE ST_Y(geom::geometry)::text END AS latitude,
-    CASE WHEN geom IS NULL THEN NULL ELSE ST_X(geom::geometry)::text END AS longitude,
-    is_national,
-    published_at;
-`
-
-const RECENT_HEADLINES_SQL = `
-  SELECT headline
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $1::int)
-  ORDER BY published_at DESC
-  LIMIT $2::int;
-`
-
-const INSERT_INGESTION_RUN_SQL = `
-  INSERT INTO ingestion_runs (
-    feed_url,
-    decision_path,
-    status,
-    error_message,
-    started_at,
-    finished_at
-  )
-  VALUES ($1, $2, $3, $4, $5, $6);
-`
-
-const CLUSTER_GRID_SQL = `
-  SELECT
-    ST_Y(ST_Centroid(ST_Collect(geom::geometry)))::double precision AS latitude,
-    ST_X(ST_Centroid(ST_Collect(geom::geometry)))::double precision AS longitude,
-    COUNT(*)::int AS count,
-    json_agg(DISTINCT category) AS categories_json
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $5::int)
-    AND is_national = FALSE
-    AND geom IS NOT NULL
-    AND geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-  GROUP BY ST_SnapToGrid(geom::geometry, $6::double precision)
-  ORDER BY count DESC
-  LIMIT 500;
-`
-
-const CLUSTER_INDIVIDUAL_SQL = `
-  SELECT
-    id,
-    headline,
-    summary,
-    source_url,
-    location_name,
-    city,
-    state,
-    category,
-    ST_Y(geom::geometry)::double precision AS latitude,
-    ST_X(geom::geometry)::double precision AS longitude,
-    is_national,
-    published_at
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $5::int)
-    AND is_national = FALSE
-    AND geom IS NOT NULL
-    AND geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-  ORDER BY published_at DESC
-  LIMIT 500;
-`
-
-const NATIONAL_ITEMS_SQL = `
-  SELECT
-    id,
-    headline,
-    summary,
-    source_url,
-    location_name,
-    city,
-    state,
-    category,
-    NULL::double precision AS latitude,
-    NULL::double precision AS longitude,
-    is_national,
-    published_at
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $1::int)
-    AND is_national = TRUE
-  ORDER BY published_at DESC
-  LIMIT 100;
-`
-
-const CLUSTER_ARTICLES_SQL = `
-  SELECT
-    id,
-    headline,
-    summary,
-    source_url,
-    location_name,
-    city,
-    state,
-    category,
-    ST_Y(geom::geometry)::double precision AS latitude,
-    ST_X(geom::geometry)::double precision AS longitude,
-    is_national,
-    published_at
-  FROM news_items
-  WHERE published_at >= NOW() - make_interval(hours => $5::int)
-    AND is_national = FALSE
-    AND geom IS NOT NULL
-    AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3::double precision)
-  ORDER BY published_at DESC
-  LIMIT $4::int;
-`
 
 const normalizeCategory = (
   category: string,
@@ -218,44 +37,45 @@ const normalizeCategory = (
   return 'General'
 }
 
-const parseCoordinate = (value: string | null): number | null => {
-  if (value === null) {
-    return null
-  }
-
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-const mapRowToNewsItem = (row: NewsRow): NewsItem => {
-  return {
-    id: row.id,
-    headline: row.headline,
-    summary: row.summary,
-    sourceUrl: row.source_url,
-    locationName: row.location_name,
-    city: row.city,
-    state: row.state,
-    category: normalizeCategory(row.category, row.is_national),
-    latitude: parseCoordinate(row.latitude),
-    longitude: parseCoordinate(row.longitude),
-    isNational: row.is_national,
-    publishedAt: row.published_at.toISOString(),
-  }
-}
-
 export class NewsRepository {
-  async findByViewport(viewport: ViewportQuery): Promise<NewsItem[]> {
+  async findByViewport(viewport: ViewportQuery): Promise<MapMarker[]> {
     try {
-      const result = await getPgPool().query<NewsRow>(VIEWPORT_SQL, [
-        viewport.minLng,
-        viewport.minLat,
-        viewport.maxLng,
-        viewport.maxLat,
-        viewport.hours,
-      ])
+      const result = await getDb().execute(sql`
+        SELECT
+          l.id,
+          n.headline,
+          n.summary,
+          n.source_url,
+          l.location_name,
+          l.city,
+          l.state,
+          n.category,
+          CASE WHEN l.geom IS NULL THEN NULL ELSE ST_Y(l.geom::geometry)::text END AS latitude,
+          CASE WHEN l.geom IS NULL THEN NULL ELSE ST_X(l.geom::geometry)::text END AS longitude,
+          n.is_national,
+          n.published_at
+        FROM ${newsItemLocations} l
+        JOIN ${newsItems} n ON n.id = l.news_item_id
+        WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
+          AND l.geom IS NOT NULL
+          AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+        ORDER BY n.published_at DESC
+        LIMIT 300
+      `)
 
-      let mapped = result.rows.map<NewsItem>(mapRowToNewsItem)
+      let mapped = result.rows.map((row): MapMarker => ({
+        id: row.id as string,
+        headline: row.headline as string,
+        summary: row.summary as string,
+        sourceUrl: row.source_url as string,
+        city: row.city as string | null,
+        state: row.state as string | null,
+        category: normalizeCategory(row.category as string, row.is_national as boolean),
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+        publishedAt: new Date(row.published_at as string).toISOString(),
+        isCluster: false,
+      }))
 
       if (viewport.categories && viewport.categories.length > 0) {
         mapped = mapped.filter((item) => viewport.categories?.includes(item.category))
@@ -270,59 +90,114 @@ export class NewsRepository {
 
   async findRecentHeadlines(hours = 24, limit = 500): Promise<string[]> {
     try {
-      const result = await getPgPool().query<HeadlineRow>(RECENT_HEADLINES_SQL, [
-        hours,
-        limit,
-      ])
+      const result = await getDb()
+        .select({ headline: newsItems.headline })
+        .from(newsItems)
+        .where(
+          gte(
+            newsItems.publishedAt,
+            sql`NOW() - make_interval(hours => ${hours}::int)`,
+          ),
+        )
+        .orderBy(desc(newsItems.publishedAt))
+        .limit(limit)
 
-      return result.rows.map((row) => row.headline)
+      return result.map((row) => row.headline)
     } catch (error) {
       logger.warn({ error }, 'Failed to fetch recent headlines for dedupe cache')
       return []
     }
   }
 
-  async createNewsItem(input: CreateNewsItemInput): Promise<NewsItem | null> {
+  async createNewsItem(input: CreateNewsItemInput): Promise<CreateNewsItemResult | null> {
     try {
-      const result = await getPgPool().query<NewsRow>(INSERT_NEWS_ITEM_SQL, [
-        input.sourceUrl,
-        input.headline,
-        input.summary,
-        input.category,
-        input.locationName,
-        input.city,
-        input.state,
-        input.isNational,
-        input.latitude,
-        input.longitude,
-        input.publishedAt,
-      ])
+      return await getDb().transaction(async (tx) => {
+        const [itemRow] = await tx
+          .insert(newsItems)
+          .values({
+            sourceUrl: input.sourceUrl,
+            headline: input.headline,
+            summary: input.summary,
+            category: input.category,
+            isNational: input.isNational,
+            publishedAt: new Date(input.publishedAt),
+          })
+          .onConflictDoNothing()
+          .returning()
 
-      const row = result.rows[0]
-      return row ? mapRowToNewsItem(row) : null
+        if (!itemRow) {
+          return null
+        }
+
+        const locations: NewsItemLocation[] = []
+
+        for (const loc of input.locations) {
+          const geomSql =
+            loc.latitude != null && loc.longitude != null
+              ? sql`ST_SetSRID(ST_MakePoint(${loc.longitude}::double precision, ${loc.latitude}::double precision), 4326)::geography`
+              : sql`NULL`
+
+          const locRows = await tx.execute(sql`
+            INSERT INTO ${newsItemLocations} (news_item_id, location_name, city, state, is_primary, geom)
+            VALUES (${itemRow.id}, ${loc.locationName ?? null}, ${loc.city ?? null}, ${loc.state ?? null}, ${loc.isPrimary}, ${geomSql})
+            RETURNING
+              id,
+              news_item_id AS "newsItemId",
+              location_name AS "locationName",
+              city,
+              state,
+              is_primary AS "isPrimary",
+              CASE WHEN geom IS NULL THEN NULL ELSE ST_Y(geom::geometry)::text END AS latitude,
+              CASE WHEN geom IS NULL THEN NULL ELSE ST_X(geom::geometry)::text END AS longitude
+          `)
+
+          const row = locRows.rows[0]
+          if (row) {
+            locations.push({
+              id: row.id as string,
+              newsItemId: row.newsItemId as string,
+              locationName: row.locationName as string | null,
+              city: row.city as string | null,
+              state: row.state as string | null,
+              isPrimary: row.isPrimary as boolean,
+              latitude: row.latitude != null ? Number(row.latitude) : null,
+              longitude: row.longitude != null ? Number(row.longitude) : null,
+            })
+          }
+        }
+
+        return {
+          item: {
+            id: itemRow.id,
+            headline: itemRow.headline,
+            summary: itemRow.summary,
+            sourceUrl: itemRow.sourceUrl,
+            category: normalizeCategory(itemRow.category, itemRow.isNational),
+            isNational: itemRow.isNational,
+            publishedAt: itemRow.publishedAt.toISOString(),
+          },
+          locations,
+        }
+      })
     } catch (error) {
       logger.error(
         { error, sourceUrl: input.sourceUrl },
-        'Failed to insert news item',
+        'Failed to insert news item with locations',
       )
-
       return null
     }
   }
 
   async recordIngestionRun(input: IngestionRunInput): Promise<void> {
-    const startedAt = input.startedAt ?? new Date()
-    const finishedAt = input.finishedAt ?? new Date()
-
     try {
-      await getPgPool().query(INSERT_INGESTION_RUN_SQL, [
-        input.feedUrl,
-        input.decisionPath,
-        input.status,
-        input.errorMessage ?? null,
-        startedAt,
-        finishedAt,
-      ])
+      await getDb().insert(ingestionRuns).values({
+        feedUrl: input.feedUrl,
+        decisionPath: input.decisionPath,
+        status: input.status,
+        errorMessage: input.errorMessage ?? null,
+        startedAt: input.startedAt ?? new Date(),
+        finishedAt: input.finishedAt ?? new Date(),
+      })
     } catch (error) {
       logger.warn(
         { error, feedUrl: input.feedUrl },
@@ -341,7 +216,7 @@ export class NewsRepository {
 
   async findClusteredViewport(query: ClusteredViewportQuery): Promise<{
     features: MapFeature[]
-    nationalItems: NewsItem[]
+    nationalItems: NationalItem[]
   }> {
     const { zoom, ...viewport } = query
     const gridSize = this.getGridSize(zoom)
@@ -351,28 +226,32 @@ export class NewsRepository {
 
     try {
       if (shouldCluster) {
-        const result = await getPgPool().query<{
-          latitude: number
-          longitude: number
-          count: number
-          categories_json: string[]
-        }>(CLUSTER_GRID_SQL, [
-          viewport.minLng,
-          viewport.minLat,
-          viewport.maxLng,
-          viewport.maxLat,
-          viewport.hours,
-          gridSize,
-        ])
+        const result = await getDb().execute(sql`
+          SELECT
+            ST_Y(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS latitude,
+            ST_X(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS longitude,
+            COUNT(*)::int AS count,
+            json_agg(DISTINCT n.category) AS categories_json
+          FROM ${newsItemLocations} l
+          JOIN ${newsItems} n ON n.id = l.news_item_id
+          WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
+            AND n.is_national = FALSE
+            AND l.geom IS NOT NULL
+            AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+          GROUP BY ST_SnapToGrid(l.geom::geometry, ${gridSize}::double precision)
+          ORDER BY count DESC
+          LIMIT 500
+        `)
 
         for (const row of result.rows) {
-          const validCategories = (row.categories_json ?? []).filter(isNewsCategory)
+          const rawCategories = row.categories_json as string[] | null
+          const validCategories = (rawCategories ?? []).filter(isNewsCategory)
 
-          if (row.count === 1 && validCategories.length === 1) {
+          if ((row.count as number) === 1 && validCategories.length === 1) {
             features.push({
-              id: `marker-${row.latitude.toFixed(4)}-${row.longitude.toFixed(4)}`,
-              latitude: row.latitude,
-              longitude: row.longitude,
+              id: `marker-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
+              latitude: row.latitude as number,
+              longitude: row.longitude as number,
               category: validCategories[0] ?? 'General',
               headline: '',
               summary: '',
@@ -384,38 +263,54 @@ export class NewsRepository {
             } satisfies MapMarker)
           } else {
             features.push({
-              id: `cluster-${row.latitude.toFixed(4)}-${row.longitude.toFixed(4)}`,
-              latitude: row.latitude,
-              longitude: row.longitude,
-              count: row.count,
+              id: `cluster-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
+              latitude: row.latitude as number,
+              longitude: row.longitude as number,
+              count: row.count as number,
               topCategories: validCategories.slice(0, 3),
               isCluster: true,
             } satisfies MapCluster)
           }
         }
       } else {
-        const result = await getPgPool().query<NewsRow>(CLUSTER_INDIVIDUAL_SQL, [
-          viewport.minLng,
-          viewport.minLat,
-          viewport.maxLng,
-          viewport.maxLat,
-          viewport.hours,
-        ])
+        const result = await getDb().execute(sql`
+          SELECT
+            l.id,
+            n.headline,
+            n.summary,
+            n.source_url,
+            l.location_name,
+            l.city,
+            l.state,
+            n.category,
+            ST_Y(l.geom::geometry)::double precision AS latitude,
+            ST_X(l.geom::geometry)::double precision AS longitude,
+            n.is_national,
+            n.published_at
+          FROM ${newsItemLocations} l
+          JOIN ${newsItems} n ON n.id = l.news_item_id
+          WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
+            AND n.is_national = FALSE
+            AND l.geom IS NOT NULL
+            AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+          ORDER BY n.published_at DESC
+          LIMIT 500
+        `)
 
         for (const row of result.rows) {
           features.push({
-            id: row.id,
-            latitude: Number(row.latitude),
-            longitude: Number(row.longitude),
-            category: normalizeCategory(row.category, row.is_national),
-            headline: row.headline,
-            summary: row.summary,
-            sourceUrl: row.source_url,
-            city: row.city,
-            state: row.state,
-            publishedAt: row.published_at.toISOString(),
+            id: row.id as string,
+            headline: row.headline as string,
+            summary: row.summary as string,
+            sourceUrl: row.source_url as string,
+            city: row.city as string | null,
+            state: row.state as string | null,
+            category: normalizeCategory(row.category as string, row.is_national as boolean),
+            latitude: row.latitude as number,
+            longitude: row.longitude as number,
+            publishedAt: new Date(row.published_at as string).toISOString(),
             isCluster: false,
-          } satisfies MapMarker)
+          })
         }
       }
     } catch (error) {
@@ -434,14 +329,32 @@ export class NewsRepository {
       features.push(...filtered)
     }
 
-    let nationalItems: NewsItem[] = []
+    let nationalItems: NationalItem[] = []
 
     try {
-      const nationalResult = await getPgPool().query<NewsRow>(NATIONAL_ITEMS_SQL, [
-        viewport.hours,
-      ])
+      const nationalResult = await getDb()
+        .select()
+        .from(newsItems)
+        .where(
+          and(
+            eq(newsItems.isNational, true),
+            gte(
+              newsItems.publishedAt,
+              sql`NOW() - make_interval(hours => ${viewport.hours}::int)`,
+            ),
+          ),
+        )
+        .orderBy(desc(newsItems.publishedAt))
+        .limit(100)
 
-      nationalItems = nationalResult.rows.map(mapRowToNewsItem)
+      nationalItems = nationalResult.map((row) => ({
+        id: row.id,
+        headline: row.headline,
+        summary: row.summary,
+        sourceUrl: row.sourceUrl,
+        category: normalizeCategory(row.category, row.isNational),
+        publishedAt: row.publishedAt.toISOString(),
+      }))
 
       if (viewport.categories && viewport.categories.length > 0) {
         nationalItems = nationalItems.filter((item) =>
@@ -461,17 +374,45 @@ export class NewsRepository {
     radiusMeters: number,
     limit: number,
     hours: number,
-  ): Promise<NewsItem[]> {
+  ): Promise<MapMarker[]> {
     try {
-      const result = await getPgPool().query<NewsRow>(CLUSTER_ARTICLES_SQL, [
-        longitude,
-        latitude,
-        radiusMeters,
-        limit,
-        hours,
-      ])
+      const result = await getDb().execute(sql`
+        SELECT
+          l.id,
+          n.headline,
+          n.summary,
+          n.source_url,
+          l.location_name,
+          l.city,
+          l.state,
+          n.category,
+          ST_Y(l.geom::geometry)::double precision AS latitude,
+          ST_X(l.geom::geometry)::double precision AS longitude,
+          n.is_national,
+          n.published_at
+        FROM ${newsItemLocations} l
+        JOIN ${newsItems} n ON n.id = l.news_item_id
+        WHERE n.published_at >= NOW() - make_interval(hours => ${hours}::int)
+          AND n.is_national = FALSE
+          AND l.geom IS NOT NULL
+          AND ST_DWithin(l.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+        ORDER BY n.published_at DESC
+        LIMIT ${limit}::int
+      `)
 
-      return result.rows.map(mapRowToNewsItem)
+      return result.rows.map((row): MapMarker => ({
+        id: row.id as string,
+        headline: row.headline as string,
+        summary: row.summary as string,
+        sourceUrl: row.source_url as string,
+        city: row.city as string | null,
+        state: row.state as string | null,
+        category: normalizeCategory(row.category as string, row.is_national as boolean),
+        latitude: row.latitude as number,
+        longitude: row.longitude as number,
+        publishedAt: new Date(row.published_at as string).toISOString(),
+        isCluster: false,
+      }))
     } catch (error) {
       logger.warn({ error }, 'Cluster articles query failed')
       return []
