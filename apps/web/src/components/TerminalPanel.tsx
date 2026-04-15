@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal, X, ChevronDown, Play, Clock, Maximize2, Minimize2 } from 'lucide-react'
 import type { ProcessingLogEntry, ProcessingStatus, ProcessingStage } from '../hooks/useProcessingLogs'
 
@@ -72,7 +72,7 @@ function truncateText(text: string, maxLen = 50): string {
   return text.slice(0, maxLen - 3) + '...'
 }
 
-function LogEntry({ log }: { log: ProcessingLogEntry }) {
+const LogEntry = memo(function LogEntry({ log }: { log: ProcessingLogEntry }) {
   const isReasoning = log.stage === 'ai_reasoning'
   const isStreaming = isReasoning && log.isStreaming
 
@@ -98,7 +98,7 @@ function LogEntry({ log }: { log: ProcessingLogEntry }) {
       </span>
     </div>
   )
-}
+})
 
 function NextSyncCountdown({ nextSyncAt }: { nextSyncAt: string | null }) {
   const [display, setDisplay] = useState(() => formatNextSync(nextSyncAt))
