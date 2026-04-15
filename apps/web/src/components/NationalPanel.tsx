@@ -16,7 +16,7 @@ export function NationalPanel({ items, isVisible, onToggle }: NationalPanelProps
         aria-expanded={isVisible}
         aria-controls="national-panel-content"
         aria-label={`National News panel${items.length > 0 ? `, ${items.length} articles` : ''}`}
-        className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+        className="glass-panel btn-interactive flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-slate-900"
       >
         <span
           className="inline-block h-2.5 w-2.5 rounded-full"
@@ -37,17 +37,21 @@ export function NationalPanel({ items, isVisible, onToggle }: NationalPanelProps
           id="national-panel-content"
           role="region"
           aria-label="National news articles"
-          className="glass-panel mt-2 max-h-80 w-72 overflow-y-auto p-3"
+          className="glass-panel mt-2 max-h-80 w-72 overflow-y-auto p-3 animate-in fade-in-0 zoom-in-95 slide-in-from-left-3 duration-200"
         >
           <ul className="space-y-2" aria-live="polite">
-            {items.map((item) => (
-              <li key={item.id}>
+            {items.map((item, i) => (
+              <li
+                key={item.id}
+                className="animate-fade-in"
+                style={{ animationDelay: `${i * 40}ms` }}
+              >
                 <a
                   href={item.sourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={`${item.headline} — ${new Date(item.publishedAt).toLocaleDateString('en-IN')}`}
-                  className="group block rounded-md p-2 transition-colors hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-400"
+                  className="group block rounded-md p-2 transition-all duration-150 hover:bg-white/5 hover:translate-x-0.5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-400"
                 >
                   <p className="text-xs font-medium leading-snug text-slate-200 group-hover:text-white">
                     {item.headline}

@@ -343,7 +343,7 @@ export function MapComponent({
 
       {isLoading && (
         <div className="pointer-events-none absolute right-3 top-3 z-10">
-          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-slate-900/80 px-3 py-1.5 backdrop-blur-sm">
+          <div className="animate-fade-in flex items-center gap-2 rounded-lg border border-white/10 bg-slate-900/80 px-3 py-1.5 backdrop-blur-sm">
             <div className="h-2 w-2 animate-pulse rounded-full bg-sky-400" />
             <span className="text-xs text-slate-300">Loading...</span>
           </div>

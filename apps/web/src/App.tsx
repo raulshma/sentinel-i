@@ -120,7 +120,7 @@ function App() {
         Skip to map content
       </a>
 
-      <header className="glass-panel mx-3 mt-3 flex items-center justify-between rounded-xl px-4 py-3" role="banner">
+      <header className="glass-panel mx-3 mt-3 flex items-center justify-between rounded-xl px-4 py-3 animate-slide-down" role="banner">
         <div className="flex items-center gap-4">
           <h1 className="text-base font-semibold text-white">
             Sentinel-i
@@ -137,9 +137,10 @@ function App() {
             aria-label={`Connection status: ${isSocketConnected ? 'live' : 'polling'}. ${connectedUsers} users online`}
           >
             <div
-              className={`h-2 w-2 rounded-full ${
-                isSocketConnected ? 'bg-emerald-400' : 'bg-amber-400'
+              className={`h-2 w-2 rounded-full transition-smooth ${
+                isSocketConnected ? 'bg-emerald-400 animate-pulse-glow' : 'bg-amber-400'
               }`}
+              style={isSocketConnected ? { '--glow-color': 'rgba(52, 211, 153, 0.5)' } as React.CSSProperties : undefined}
               aria-hidden="true"
             />
             <span className="text-[11px] text-slate-400">
@@ -192,7 +193,7 @@ function App() {
         </Suspense>
       </div>
 
-      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5" role="contentinfo" aria-label="Category legend and controls">
+      <footer className="glass-panel mx-3 mb-3 mt-1 rounded-xl px-4 py-2.5 animate-slide-up" role="contentinfo" aria-label="Category legend and controls">
         <ul className="flex flex-wrap items-center gap-x-4 gap-y-1" aria-label="News categories">
           {CATEGORY_ENTRIES.map(({ label, color }) => {
             const isActive =
@@ -200,12 +201,12 @@ function App() {
             return (
               <li
                 key={label}
-                className={`flex items-center gap-1.5 transition-opacity ${
+                className={`flex items-center gap-1.5 transition-all duration-200 ${
                   isActive ? 'opacity-100' : 'opacity-30'
-                }`}
+                } hover:scale-105`}
               >
                 <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  className="inline-block h-2.5 w-2.5 rounded-full transition-transform duration-200 hover:scale-125"
                   style={{ backgroundColor: color }}
                   aria-hidden="true"
                 />
@@ -231,7 +232,7 @@ function App() {
                 }}
                 aria-label={showUsage ? 'Close usage panel' : 'Open usage panel'}
                 aria-expanded={showUsage}
-                className="glass-panel flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                className="glass-panel btn-interactive flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
               >
                 <CreditCard size={13} aria-hidden="true" />
                 <span className="hidden sm:inline">Usage</span>

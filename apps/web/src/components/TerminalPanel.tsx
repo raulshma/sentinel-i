@@ -380,9 +380,9 @@ export function TerminalPanel({
       aria-label="Article processing terminal"
       className={`glass-panel overflow-hidden rounded-xl transition-all duration-200 ${
         isMaximized && isOpen
-          ? "fixed inset-x-3 top-3 z-120 flex flex-col"
+          ? "fixed inset-x-3 top-3 z-120 flex flex-col animate-scale-in"
           : "absolute bottom-full right-0 mb-2 w-160 max-w-[calc(100vw-1.5rem)]"
-      } ${isOpen ? "pointer-events-auto opacity-100" : "pointer-events-none invisible opacity-0"}`}
+      } ${isOpen ? "pointer-events-auto opacity-100 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-3 duration-200" : "pointer-events-none invisible opacity-0"}`}
       style={
         isMaximized && isOpen
           ? { height: viewportHeight - 24 }
@@ -412,7 +412,7 @@ export function TerminalPanel({
               }
             }}
             aria-label="Refresh current tab"
-            className="text-slate-400 transition-colors hover:text-white"
+            className="text-slate-400 transition-all duration-150 hover:text-white hover:scale-110"
           >
             <RefreshCw
               size={12}
@@ -427,7 +427,7 @@ export function TerminalPanel({
             type="button"
             onClick={handleToggleMaximize}
             aria-label={isMaximized ? "Restore terminal" : "Maximize terminal"}
-            className="text-slate-400 transition-colors hover:text-white"
+            className="text-slate-400 transition-all duration-150 hover:text-white hover:scale-110"
           >
             {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
           </button>
@@ -435,7 +435,7 @@ export function TerminalPanel({
             type="button"
             onClick={onToggle}
             aria-label="Close terminal"
-            className="text-slate-400 transition-colors hover:text-white"
+            className="text-slate-400 transition-all duration-150 hover:text-white hover:scale-110 hover:rotate-90"
           >
             <X size={12} />
           </button>
@@ -446,7 +446,7 @@ export function TerminalPanel({
         <button
           type="button"
           onClick={() => handleTabChange("stream")}
-          className={`rounded-md px-2 py-1 text-[10px] transition-colors ${
+          className={`rounded-md px-2 py-1 text-[10px] transition-all duration-150 hover:scale-[1.04] active:scale-[0.97] ${
             activeTab === "stream"
               ? "bg-sky-500/20 text-sky-300"
               : "text-slate-400 hover:bg-white/10"
@@ -458,7 +458,7 @@ export function TerminalPanel({
         <button
           type="button"
           onClick={() => handleTabChange("timeline")}
-          className={`rounded-md px-2 py-1 text-[10px] transition-colors ${
+          className={`rounded-md px-2 py-1 text-[10px] transition-all duration-150 hover:scale-[1.04] active:scale-[0.97] ${
             activeTab === "timeline"
               ? "bg-sky-500/20 text-sky-300"
               : "text-slate-400 hover:bg-white/10"
@@ -470,7 +470,7 @@ export function TerminalPanel({
         <button
           type="button"
           onClick={() => handleTabChange("analytics")}
-          className={`rounded-md px-2 py-1 text-[10px] transition-colors ${
+          className={`rounded-md px-2 py-1 text-[10px] transition-all duration-150 hover:scale-[1.04] active:scale-[0.97] ${
             activeTab === "analytics"
               ? "bg-sky-500/20 text-sky-300"
               : "text-slate-400 hover:bg-white/10"
@@ -531,7 +531,7 @@ export function TerminalPanel({
                 setSelectedGroupId(null);
                 loadTimeline();
               }}
-              className="rounded-md bg-sky-500/20 px-2 py-1 text-[10px] text-sky-300 hover:bg-sky-500/30"
+              className="rounded-md bg-sky-500/20 px-2 py-1 text-[10px] text-sky-300 transition-all duration-150 hover:bg-sky-500/30 hover:scale-[1.04] active:scale-[0.97]"
             >
               Load
             </button>
@@ -561,7 +561,7 @@ export function TerminalPanel({
                       key={group.groupId}
                       type="button"
                       onClick={() => setSelectedGroupId(group.groupId)}
-                      className={`min-w-40 rounded-md border px-2 py-1 text-left transition-colors ${
+                      className={`min-w-40 rounded-md border px-2 py-1 text-left transition-all duration-150 hover:scale-[1.02] ${
                         isActive
                           ? "border-sky-400/60 bg-sky-500/20"
                           : "border-white/10 bg-black/30 hover:bg-white/10"
@@ -758,7 +758,8 @@ export function TerminalPanel({
                               return (
                                 <div
                                   key={bucket.bucketStart}
-                                  className="group relative flex-1"
+                                  className="group relative flex-1 animate-fade-in"
+                                  style={{ animationDelay: `${analytics.activitySeries.indexOf(bucket) * 15}ms` }}
                                   title={`${formatActivityBucketLabel(bucket.bucketStart, analytics.windowHours)} · total ${bucket.totalEvents} · err ${bucket.errorEvents} · avg ${formatDuration(bucket.avgDurationMs ?? undefined)}`}
                                 >
                                   <div
@@ -881,7 +882,7 @@ export function TerminalPanel({
           aria-label={
             isOpen ? "Close processing terminal" : "Open processing terminal"
           }
-          className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
+          className="glass-panel btn-interactive flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400"
         >
           <Terminal size={14} aria-hidden="true" />
           <span className="hidden sm:inline">DevTools</span>
@@ -904,7 +905,7 @@ export function TerminalPanel({
           onClick={onTriggerSync}
           disabled={isSyncing}
           aria-label="Trigger manual sync"
-          className="flex items-center gap-1 rounded-md bg-sky-500/20 px-2 py-1 text-[10px] font-medium text-sky-300 transition-colors hover:bg-sky-500/30 disabled:opacity-40"
+          className="flex items-center gap-1 rounded-md bg-sky-500/20 px-2 py-1 text-[10px] font-medium text-sky-300 transition-all duration-150 hover:bg-sky-500/30 hover:scale-[1.04] active:scale-[0.97] disabled:opacity-40"
         >
           <Play
             size={9}

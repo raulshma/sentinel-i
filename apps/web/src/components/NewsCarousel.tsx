@@ -199,9 +199,9 @@ export function NewsCarousel({
       aria-modal="true"
       aria-label={feature.isCluster ? `News cluster with ${feature.count} articles` : `News article: ${feature.headline}`}
     >
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" />
 
-      <div className="glass-panel relative z-10 flex w-full max-w-2xl max-h-[75vh] sm:max-h-[80vh] flex-col overflow-hidden rounded-t-2xl border border-white/15 bg-slate-900/90 shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200 sm:mx-4 sm:rounded-2xl">
+      <div className="glass-panel relative z-10 flex w-full max-w-2xl max-h-[75vh] sm:max-h-[80vh] flex-col overflow-hidden rounded-t-2xl border border-white/15 bg-slate-900/90 shadow-2xl animate-slide-in-up duration-200 sm:mx-4 sm:rounded-2xl">
         <div
           className="flex items-center justify-between border-b border-white/10 px-6 py-3.5"
           style={{
@@ -229,7 +229,7 @@ export function NewsCarousel({
             type="button"
             onClick={onClose}
             aria-label="Close news carousel"
-            className="rounded-lg p-2 text-slate-400 transition-all hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+            className="rounded-lg p-2 text-slate-400 transition-all duration-150 hover:bg-white/10 hover:text-white hover:rotate-90 focus:outline-none focus:ring-2 focus:ring-sky-400"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -254,7 +254,7 @@ export function NewsCarousel({
                   type="button"
                   onClick={() => scrollToIndex(currentIndex - 1)}
                   aria-label="Previous article"
-                  className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-slate-700/90 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all duration-150 hover:bg-slate-700/90 hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M15 18l-6-6 6-6" />
@@ -266,7 +266,7 @@ export function NewsCarousel({
                   type="button"
                   onClick={() => scrollToIndex(currentIndex + 1)}
                   aria-label="Next article"
-                  className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-slate-700/90 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all duration-150 hover:bg-slate-700/90 hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M9 18l6-6-6-6" />
@@ -290,7 +290,7 @@ export function NewsCarousel({
                     aria-label={`Article ${items.indexOf(item) + 1} of ${items.length}: ${item.headline}`}
                   >
                     <div
-                      className="h-1"
+                      className="h-1 transition-all duration-300"
                       style={{
                         background: `linear-gradient(90deg, ${CATEGORY_COLORS[item.category] ?? '#64748b'}, transparent)`,
                       }}
@@ -338,7 +338,7 @@ export function NewsCarousel({
                             href={item.sourceUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-400 transition-all hover:bg-sky-400/20 hover:border-sky-400/30 hover:gap-2"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-400 transition-all duration-150 hover:bg-sky-400/20 hover:border-sky-400/30 hover:gap-2 hover:scale-[1.03] active:scale-[0.98]"
                           >
                             Read source
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

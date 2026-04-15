@@ -63,14 +63,14 @@ export function FilterPanel({
         aria-expanded={isOpen}
         aria-controls="filter-panel-content"
         aria-label={`Filters${hasActiveFilters ? `, ${selectedCategories.length} categories selected` : ''}`}
-        className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+        className="glass-panel btn-interactive flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 focus:ring-offset-slate-900"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path d="M3 6h18M6 12h12M9 18h6" />
         </svg>
         Filters
         {hasActiveFilters && (
-          <span className="rounded-full bg-sky-500/80 px-1.5 py-0.5 text-[9px] font-bold text-white" aria-label={`${selectedCategories.length} active filters`}>
+          <span className="animate-pop rounded-full bg-sky-500/80 px-1.5 py-0.5 text-[9px] font-bold text-white" aria-label={`${selectedCategories.length} active filters`}>
             {selectedCategories.length || ''}
           </span>
         )}
@@ -81,7 +81,7 @@ export function FilterPanel({
           id="filter-panel-content"
           role="region"
           aria-label="Filter controls"
-          className="glass-panel w-64 p-4 space-y-4 animate-in fade-in-0 zoom-in-95 duration-150"
+          className="glass-panel w-64 p-4 space-y-4 animate-in fade-in-0 zoom-in-95 slide-in-from-right-3 duration-200"
         >
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
@@ -110,19 +110,20 @@ export function FilterPanel({
                   role="checkbox"
                   aria-checked={isSelected}
                   aria-label={`${category} category filter`}
-                  className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+                  className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-sky-400 hover:scale-[1.04] active:scale-[0.97] ${
                     isSelected
-                      ? 'border border-white/20 bg-white/15 text-white'
+                      ? 'border border-white/20 bg-white/15 text-white shadow-[0_0_8px_rgba(255,255,255,0.05)]'
                       : 'border border-transparent bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200'
                   }`}
                 >
                   <span
-                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    className="inline-block h-1.5 w-1.5 rounded-full transition-transform duration-150"
                     aria-hidden="true"
                     style={{
                       backgroundColor: isSelected
                         ? CATEGORY_COLORS[category]
                         : `${CATEGORY_COLORS[category]}66`,
+                      transform: isSelected ? 'scale(1.2)' : 'scale(1)',
                     }}
                   />
                   {category}
@@ -144,9 +145,9 @@ export function FilterPanel({
                   role="radio"
                   aria-checked={hours === option.value}
                   aria-label={`Last ${option.label}`}
-                  className={`flex-1 rounded-md px-2 py-1.5 text-[11px] font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+                  className={`flex-1 rounded-md px-2 py-1.5 text-[11px] font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-sky-400 hover:scale-[1.04] active:scale-[0.97] ${
                     hours === option.value
-                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30 shadow-[0_0_12px_rgba(56,189,248,0.15)]'
                       : 'bg-white/5 text-slate-400 border border-transparent hover:bg-white/10 hover:text-slate-200'
                   }`}
                 >

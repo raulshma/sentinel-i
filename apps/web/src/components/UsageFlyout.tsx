@@ -66,9 +66,9 @@ function UsageRow({ label, value, icon: Icon }: { label: string; value: string; 
   )
 }
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionCard({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3">
+    <div className={`rounded-xl bg-white/[0.03] border border-white/[0.06] p-3 transition-all duration-200 hover:border-white/10 ${className ?? ''}`}>
       <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">{title}</h3>
       {children}
     </div>
@@ -114,7 +114,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
 
   return (
     <>
-      <div className="fixed inset-0 z-[90] bg-black/20 backdrop-blur-[2px] animate-in fade-in-0 duration-200" />
+      <div className="fixed inset-0 z-[90] bg-black/20 backdrop-blur-[2px] animate-fade-in duration-200" />
       <div
         ref={panelRef}
         role="dialog"
@@ -122,12 +122,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
         className="fixed z-[91] bottom-16 right-4 w-[340px] max-h-[calc(100vh-100px)] overflow-y-auto
           rounded-2xl border border-white/[0.08] bg-[#1c1c1c]/95 backdrop-blur-2xl
           shadow-[0_24px_80px_-12px_rgba(0,0,0,0.8),0_0_1px_rgba(255,255,255,0.1)]
-          animate-in fade-in-0 zoom-in-98 slide-in-from-bottom-2 duration-200"
-        style={{
-          '--tw-enter-opacity': '0',
-          '--tw-enter-scale': '0.98',
-          '--tw-enter-translate-y': '8px',
-        } as React.CSSProperties}
+          animate-slide-in-up duration-200"
       >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.06] bg-[#1c1c1c]/90 backdrop-blur-xl px-4 py-3 rounded-t-2xl">
           <div className="flex items-center gap-2">
@@ -140,7 +135,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
               onClick={onRefresh}
               disabled={isLoading}
               aria-label="Refresh usage data"
-              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+              className="rounded-lg p-1.5 text-slate-400 transition-all duration-150 hover:bg-white/10 hover:text-white hover:rotate-90 disabled:opacity-40"
             >
               <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
             </button>
@@ -148,7 +143,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
               type="button"
               onClick={onClose}
               aria-label="Close usage panel"
-              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+              className="rounded-lg p-1.5 text-slate-400 transition-all duration-150 hover:bg-white/10 hover:text-white hover:rotate-90"
             >
               <X size={13} />
             </button>
@@ -183,7 +178,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
               </div>
 
               {keyData.limit !== null && (
-                <SectionCard title="Credit Limit">
+                <SectionCard title="Credit Limit" className="animate-fade-in stagger-1">
                   <CreditBar used={keyData.usage} limit={keyData.limit} />
                   <div className="mt-2 space-y-0">
                     <UsageRow label="Total Limit" value={formatCredits(keyData.limit)} icon={CreditCard} />
@@ -195,7 +190,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
                 </SectionCard>
               )}
 
-              <SectionCard title="API Usage">
+              <SectionCard title="API Usage" className="animate-fade-in stagger-2">
                 <UsageRow label="All Time" value={formatCredits(keyData.usage)} icon={Zap} />
                 <div className="border-t border-white/[0.04] my-1" />
                 <UsageRow label="Today" value={formatCredits(keyData.usage_daily)} />
@@ -204,7 +199,7 @@ export function UsageFlyout({ isOpen, onClose, data, isLoading, error, onRefresh
               </SectionCard>
 
               {(keyData.byok_usage > 0 || keyData.byok_usage_daily > 0) && (
-                <SectionCard title="BYOK Usage">
+                <SectionCard title="BYOK Usage" className="animate-fade-in stagger-3">
                   <UsageRow label="All Time" value={formatCredits(keyData.byok_usage)} icon={Zap} />
                   <div className="border-t border-white/[0.04] my-1" />
                   <UsageRow label="Today" value={formatCredits(keyData.byok_usage_daily)} />
