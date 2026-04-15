@@ -1,186 +1,257 @@
-import Parser from 'rss-parser'
+import { randomUUID } from "node:crypto";
 
-import { agentService } from '../agent/agentService.js'
-import { isDevToolsEnabled } from '../config/env.js'
-import { cacheService } from './cache.service.js'
-import { rssFeedSources } from '../config/rssFeeds.js'
-import { logger } from '../config/logger.js'
+import Parser from "rss-parser";
+
+import { agentService } from "../agent/agentService.js";
+import { cacheService } from "./cache.service.js";
+import { rssFeedSources } from "../config/rssFeeds.js";
+import { logger } from "../config/logger.js";
 import {
   newsRepository,
   type NewsRepository,
-} from '../repositories/news.repository.js'
-import { socketGateway } from '../socket/socketGateway.js'
-import type { NewsCategory, CreateLocationInput } from '../types/news.js'
-import { contentFetchService, type FetchArticleContentOutput } from './contentFetch.service.js'
-import { geocodeService } from './geocode.service.js'
-import { processingEventBus } from './processingEventBus.js'
+} from "../repositories/news.repository.js";
+import { socketGateway } from "../socket/socketGateway.js";
+import type { NewsCategory, CreateLocationInput } from "../types/news.js";
+import {
+  contentFetchService,
+  type FetchArticleContentOutput,
+} from "./contentFetch.service.js";
+import { geocodeService } from "./geocode.service.js";
+import { processingEventBus } from "./processingEventBus.js";
+import type {
+  ProcessingEventType,
+  ProcessingTraceContext,
+} from "../types/processing.js";
 
 type RssItem = {
-  title?: string
-  link?: string
-  guid?: string
-  pubDate?: string
-  isoDate?: string
-  content?: string
-  contentSnippet?: string
-}
+  title?: string;
+  link?: string;
+  guid?: string;
+  pubDate?: string;
+  isoDate?: string;
+  content?: string;
+  contentSnippet?: string;
+};
 
 type RssFeed = {
-  items: RssItem[]
-}
+  items: RssItem[];
+};
 
 interface HeadlineFingerprint {
-  normalized: string
-  tokens: Set<string>
+  normalized: string;
+  tokens: Set<string>;
 }
 
 export interface RssIngestionSummary {
-  feedCount: number
-  entriesSeen: number
-  inserted: number
-  duplicateCount: number
-  nationalCount: number
-  locationCount: number
-  errorCount: number
-  startedAt: string
-  finishedAt: string
+  feedCount: number;
+  entriesSeen: number;
+  inserted: number;
+  duplicateCount: number;
+  nationalCount: number;
+  locationCount: number;
+  errorCount: number;
+  startedAt: string;
+  finishedAt: string;
 }
 
-const parser = new Parser<Record<string, never>, RssItem>()
+export interface IngestionExecutionContext {
+  runId?: string;
+  jobId?: string;
+  attempt?: number;
+  triggeredAt?: string;
+}
 
-
+const parser = new Parser<Record<string, never>, RssItem>();
 
 const STOPWORDS = new Set([
-  'the',
-  'a',
-  'an',
-  'of',
-  'on',
-  'in',
-  'for',
-  'to',
-  'from',
-  'at',
-  'with',
-  'by',
-  'after',
-  'before',
-  'and',
-  'or',
-  'vs',
-  'is',
-  'are',
-  'was',
-  'were',
-  'be',
-  'as',
-  'that',
-  'this',
-  'it',
-  'its',
-  'over',
-  'under',
-  'new',
-  'latest',
-  'india',
-])
+  "the",
+  "a",
+  "an",
+  "of",
+  "on",
+  "in",
+  "for",
+  "to",
+  "from",
+  "at",
+  "with",
+  "by",
+  "after",
+  "before",
+  "and",
+  "or",
+  "vs",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "as",
+  "that",
+  "this",
+  "it",
+  "its",
+  "over",
+  "under",
+  "new",
+  "latest",
+  "india",
+]);
 
 const CATEGORY_RULES: Array<{
-  category: Exclude<NewsCategory, 'Uncategorized / National'>
-  keywords: string[]
+  category: Exclude<NewsCategory, "Uncategorized / National">;
+  keywords: string[];
 }> = [
   {
-    category: 'Politics',
-    keywords: ['election', 'parliament', 'chief minister', 'mp', 'mla', 'bjp', 'congress'],
+    category: "Politics",
+    keywords: [
+      "election",
+      "parliament",
+      "chief minister",
+      "mp",
+      "mla",
+      "bjp",
+      "congress",
+    ],
   },
   {
-    category: 'Business',
-    keywords: ['market', 'stock', 'economy', 'inflation', 'trade', 'startup', 'funding'],
+    category: "Business",
+    keywords: [
+      "market",
+      "stock",
+      "economy",
+      "inflation",
+      "trade",
+      "startup",
+      "funding",
+    ],
   },
   {
-    category: 'Technology',
-    keywords: ['ai', 'software', 'cyber', 'digital', 'startup tech', 'internet', 'app'],
+    category: "Technology",
+    keywords: [
+      "ai",
+      "software",
+      "cyber",
+      "digital",
+      "startup tech",
+      "internet",
+      "app",
+    ],
   },
   {
-    category: 'Sports',
-    keywords: ['cricket', 'football', 'hockey', 'ipl', 'match', 'tournament', 'athlete'],
+    category: "Sports",
+    keywords: [
+      "cricket",
+      "football",
+      "hockey",
+      "ipl",
+      "match",
+      "tournament",
+      "athlete",
+    ],
   },
   {
-    category: 'Entertainment',
-    keywords: ['film', 'movie', 'actor', 'actress', 'bollywood', 'music', 'series'],
+    category: "Entertainment",
+    keywords: [
+      "film",
+      "movie",
+      "actor",
+      "actress",
+      "bollywood",
+      "music",
+      "series",
+    ],
   },
   {
-    category: 'Crime',
-    keywords: ['crime', 'murder', 'theft', 'arrest', 'police', 'fraud', 'assault'],
+    category: "Crime",
+    keywords: [
+      "crime",
+      "murder",
+      "theft",
+      "arrest",
+      "police",
+      "fraud",
+      "assault",
+    ],
   },
   {
-    category: 'Weather',
-    keywords: ['rain', 'cyclone', 'flood', 'heatwave', 'weather', 'temperature', 'monsoon'],
+    category: "Weather",
+    keywords: [
+      "rain",
+      "cyclone",
+      "flood",
+      "heatwave",
+      "weather",
+      "temperature",
+      "monsoon",
+    ],
   },
-]
+];
 
 const normalizeText = (value: string): string => {
-  return value.replace(/\s+/g, ' ').trim()
-}
+  return value.replace(/\s+/g, " ").trim();
+};
 
 const normalizeHeadline = (value: string): string => {
-  return normalizeText(value.toLowerCase().replace(/[^a-z0-9\s]/g, ' '))
-}
+  return normalizeText(value.toLowerCase().replace(/[^a-z0-9\s]/g, " "));
+};
 
 const tokenizeHeadline = (value: string): Set<string> => {
   const tokens = normalizeHeadline(value)
-    .split(' ')
-    .filter((token) => token.length > 2 && !STOPWORDS.has(token))
+    .split(" ")
+    .filter((token) => token.length > 2 && !STOPWORDS.has(token));
 
-  return new Set(tokens)
-}
+  return new Set(tokens);
+};
 
 const createFingerprint = (headline: string): HeadlineFingerprint => {
   return {
     normalized: normalizeHeadline(headline),
     tokens: tokenizeHeadline(headline),
-  }
-}
+  };
+};
 
 const jaccardSimilarity = (left: Set<string>, right: Set<string>): number => {
   if (left.size === 0 || right.size === 0) {
-    return 0
+    return 0;
   }
 
-  let overlap = 0
+  let overlap = 0;
 
   for (const token of left) {
     if (right.has(token)) {
-      overlap += 1
+      overlap += 1;
     }
   }
 
-  const union = left.size + right.size - overlap
-  return union === 0 ? 0 : overlap / union
-}
+  const union = left.size + right.size - overlap;
+  return union === 0 ? 0 : overlap / union;
+};
 
 const categorizeArticle = (text: string): NewsCategory => {
-  const normalized = text.toLowerCase()
+  const normalized = text.toLowerCase();
 
   for (const rule of CATEGORY_RULES) {
     if (rule.keywords.some((keyword) => normalized.includes(keyword))) {
-      return rule.category
+      return rule.category;
     }
   }
 
-  return 'General'
-}
+  return "General";
+};
 
 const resolvePublishedAt = (item: RssItem): string => {
-  const candidate = item.isoDate ?? item.pubDate
+  const candidate = item.isoDate ?? item.pubDate;
 
   if (!candidate) {
-    return new Date().toISOString()
+    return new Date().toISOString();
   }
 
-  const parsed = new Date(candidate)
-  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString()
-}
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime())
+    ? new Date().toISOString()
+    : parsed.toISOString();
+};
 
 export class RssIngestionService {
   constructor(private readonly repository: NewsRepository = newsRepository) {}
@@ -188,17 +259,44 @@ export class RssIngestionService {
   private log(
     sourceUrl: string,
     headline: string | null,
-    stage: Parameters<typeof processingEventBus.emitLog>[0]['stage'],
+    stage: Parameters<typeof processingEventBus.emitLog>[0]["stage"],
     message: string,
-    status: Parameters<typeof processingEventBus.emitLog>[0]['status'],
+    status: Parameters<typeof processingEventBus.emitLog>[0]["status"],
     metadata?: Record<string, unknown>,
+    context?: ProcessingTraceContext & {
+      eventType?: ProcessingEventType;
+      durationMs?: number;
+    },
   ): void {
-    if (!isDevToolsEnabled) return
-    processingEventBus.emitLog({ sourceUrl, headline, stage, message, status, metadata })
+    processingEventBus.emitLog({
+      runId: context?.runId,
+      jobId: context?.jobId,
+      traceId: context?.traceId,
+      articleId: context?.articleId,
+      feedUrl: context?.feedUrl,
+      attempt: context?.attempt,
+      eventType: context?.eventType,
+      durationMs: context?.durationMs,
+      sourceUrl,
+      headline,
+      stage,
+      message,
+      status,
+      metadata,
+    });
   }
 
-  async runIngestionCycle(): Promise<RssIngestionSummary> {
-    const startedAt = new Date()
+  async runIngestionCycle(
+    executionContext: IngestionExecutionContext = {},
+  ): Promise<RssIngestionSummary> {
+    const cycleContext: IngestionExecutionContext = {
+      runId: executionContext.runId ?? randomUUID(),
+      jobId: executionContext.jobId,
+      attempt: executionContext.attempt,
+      triggeredAt: executionContext.triggeredAt,
+    };
+
+    const startedAt = new Date();
 
     const summary: RssIngestionSummary = {
       feedCount: rssFeedSources.length,
@@ -210,58 +308,112 @@ export class RssIngestionService {
       errorCount: 0,
       startedAt: startedAt.toISOString(),
       finishedAt: startedAt.toISOString(),
-    }
+    };
 
-    const recentHeadlines = await this.repository.findRecentHeadlines(24, 600)
+    const recentHeadlines = await this.repository.findRecentHeadlines(24, 600);
     const dedupeFingerprints = recentHeadlines.map((headline) =>
       createFingerprint(headline),
-    )
+    );
 
     for (const feedUrl of rssFeedSources) {
-      const feedStartedAt = new Date()
+      const feedStartedAt = new Date();
+      const feedStartedAtMs = Date.now();
+      const feedContext: ProcessingTraceContext = {
+        runId: cycleContext.runId,
+        jobId: cycleContext.jobId,
+        attempt: cycleContext.attempt,
+        feedUrl,
+      };
 
-      this.log(feedUrl, null, 'feed_fetch', `Fetching RSS feed: ${feedUrl}`, 'start')
+      this.log(
+        feedUrl,
+        null,
+        "feed_fetch",
+        `Fetching RSS feed: ${feedUrl}`,
+        "start",
+        { triggeredAt: cycleContext.triggeredAt },
+        { ...feedContext, eventType: "start" },
+      );
 
       try {
-        const parsedFeed = (await parser.parseURL(feedUrl)) as RssFeed
+        const parsedFeed = (await parser.parseURL(feedUrl)) as RssFeed;
 
-        this.log(feedUrl, null, 'feed_parse', `Parsed ${parsedFeed.items.length} entries from feed`, 'success', { itemCount: parsedFeed.items.length })
+        const feedDurationMs = Date.now() - feedStartedAtMs;
+
+        this.log(
+          feedUrl,
+          null,
+          "feed_fetch",
+          `Fetched RSS feed (${parsedFeed.items.length} entries)`,
+          "success",
+          { itemCount: parsedFeed.items.length },
+          { ...feedContext, eventType: "end", durationMs: feedDurationMs },
+        );
+
+        this.log(
+          feedUrl,
+          null,
+          "feed_parse",
+          `Parsed ${parsedFeed.items.length} entries from feed`,
+          "success",
+          { itemCount: parsedFeed.items.length },
+          {
+            ...feedContext,
+            eventType: "checkpoint",
+            durationMs: feedDurationMs,
+          },
+        );
 
         for (const item of parsedFeed.items) {
-          summary.entriesSeen += 1
+          summary.entriesSeen += 1;
 
           await this.processFeedItem(
             item,
             feedUrl,
-            feedStartedAt,
+            new Date(),
             dedupeFingerprints,
             summary,
-          )
+            cycleContext,
+          );
         }
       } catch (error) {
-        summary.errorCount += 1
+        summary.errorCount += 1;
 
-        this.log(feedUrl, null, 'feed_fetch', `Feed parse failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+        const feedDurationMs = Date.now() - feedStartedAtMs;
+
+        this.log(
+          feedUrl,
+          null,
+          "feed_fetch",
+          `Feed parse failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          "error",
+          { failureType: "feed_parse_failed" },
+          { ...feedContext, eventType: "error", durationMs: feedDurationMs },
+        );
 
         logger.error(
           { error, feedUrl },
-          'RSS feed parsing failed for ingestion cycle',
-        )
+          "RSS feed parsing failed for ingestion cycle",
+        );
 
         await this.repository.recordIngestionRun({
+          runId: cycleContext.runId,
+          jobId: cycleContext.jobId,
           feedUrl,
-          decisionPath: 'Feed_Parse_Failed',
-          status: 'FAILED',
-          errorMessage: error instanceof Error ? error.message : 'Unknown feed parse error',
+          step: "feed_parse",
+          decisionPath: "Feed_Parse_Failed",
+          status: "FAILED",
+          errorMessage:
+            error instanceof Error ? error.message : "Unknown feed parse error",
           startedAt: feedStartedAt,
           finishedAt: new Date(),
-        })
+        });
       }
     }
 
-    summary.finishedAt = new Date().toISOString()
+    summary.finishedAt = new Date().toISOString();
 
-    return summary
+    return summary;
   }
 
   private async processFeedItem(
@@ -270,65 +422,174 @@ export class RssIngestionService {
     itemStartedAt: Date,
     dedupeFingerprints: HeadlineFingerprint[],
     summary: RssIngestionSummary,
+    executionContext: IngestionExecutionContext,
   ): Promise<void> {
-    const sourceUrl = normalizeText(item.link ?? item.guid ?? '')
-    const headline = normalizeText(item.title ?? '')
+    const sourceUrl = normalizeText(item.link ?? item.guid ?? "");
+    const headline = normalizeText(item.title ?? "");
 
     if (sourceUrl.length === 0 || headline.length === 0) {
-      return
+      return;
     }
+
+    const traceId = randomUUID();
+    const traceContext: ProcessingTraceContext = {
+      runId: executionContext.runId,
+      jobId: executionContext.jobId,
+      traceId,
+      feedUrl,
+      attempt: executionContext.attempt,
+    };
+
+    const itemStartedAtMs = Date.now();
+    const dedupeStartedAtMs = Date.now();
+
+    this.log(
+      sourceUrl,
+      headline,
+      "deduplication",
+      "Checking duplicate state",
+      "start",
+      undefined,
+      { ...traceContext, eventType: "start" },
+    );
 
     if (await cacheService.isDuplicate(sourceUrl)) {
-      summary.duplicateCount += 1
+      summary.duplicateCount += 1;
 
-      this.log(sourceUrl, headline, 'deduplication', 'Skipped: URL already in cache', 'warn')
+      const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        headline,
+        "deduplication",
+        "Skipped: URL already in cache",
+        "warn",
+        {
+          reason: "url_cache",
+          failureType: "dedupe_valkey_cache",
+        },
+        { ...traceContext, eventType: "end", durationMs: dedupeDurationMs },
+      );
 
       await this.repository.recordIngestionRun({
+        runId: executionContext.runId,
+        jobId: executionContext.jobId,
+        traceId,
         feedUrl,
-        decisionPath: 'Dedupe_Valkey_Cache',
-        status: 'SKIPPED_DUPLICATE',
+        sourceUrl,
+        headline,
+        step: "deduplication",
+        decisionPath: "Dedupe_Valkey_Cache",
+        status: "SKIPPED_DUPLICATE",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
-      })
+      });
 
-      return
+      return;
     }
 
-    const fingerprint = createFingerprint(headline)
+    const fingerprint = createFingerprint(headline);
 
     if (this.isLikelyDuplicate(fingerprint, dedupeFingerprints)) {
-      summary.duplicateCount += 1
+      summary.duplicateCount += 1;
 
-      this.log(sourceUrl, headline, 'deduplication', 'Skipped: similar headline exists', 'warn')
+      const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        headline,
+        "deduplication",
+        "Skipped: similar headline exists",
+        "warn",
+        {
+          reason: "headline_similarity",
+          failureType: "dedupe_headline_similarity",
+        },
+        { ...traceContext, eventType: "end", durationMs: dedupeDurationMs },
+      );
 
       await this.repository.recordIngestionRun({
+        runId: executionContext.runId,
+        jobId: executionContext.jobId,
+        traceId,
         feedUrl,
-        decisionPath: 'Dedupe_Title_Match',
-        status: 'SKIPPED_DUPLICATE',
+        sourceUrl,
+        headline,
+        step: "deduplication",
+        decisionPath: "Dedupe_Title_Match",
+        status: "SKIPPED_DUPLICATE",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
-      })
+      });
 
-      return
+      return;
     }
 
-    const rawSummary = normalizeText(item.contentSnippet ?? item.content ?? headline)
+    const rawSummary = normalizeText(
+      item.contentSnippet ?? item.content ?? headline,
+    );
 
     const rssFullContent = item.content
-      ? normalizeText(item.content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim())
-      : rawSummary
+      ? normalizeText(
+          item.content
+            .replace(/<[^>]*>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
+      : rawSummary;
 
     try {
-      this.log(sourceUrl, headline, 'ai_processing', 'Starting article processing pipeline', 'start')
+      const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
 
-      const agentResult = await agentService.processArticle(headline, rawSummary, sourceUrl, rssFullContent)
+      this.log(
+        sourceUrl,
+        headline,
+        "deduplication",
+        "Deduplication passed",
+        "success",
+        { reason: "accepted" },
+        { ...traceContext, eventType: "end", durationMs: dedupeDurationMs },
+      );
+
+      const pipelineStartedAtMs = Date.now();
+
+      this.log(
+        sourceUrl,
+        headline,
+        "ai_processing",
+        "Starting article processing pipeline",
+        "start",
+        undefined,
+        { ...traceContext, eventType: "start" },
+      );
+
+      const agentResult = await agentService.processArticle(
+        headline,
+        rawSummary,
+        sourceUrl,
+        rssFullContent,
+        traceContext,
+      );
 
       if (agentResult) {
-        this.log(sourceUrl, headline, 'ai_processing', `AI agent extracted: category=${agentResult.extraction.category}, locations=${agentResult.extraction.locations.length}`, 'success', {
-          decisionPath: agentResult.audit.decisionPath,
-          latencyMs: agentResult.audit.totalLatencyMs,
-          locationCount: agentResult.extraction.locations.length,
-        })
+        this.log(
+          sourceUrl,
+          headline,
+          "ai_processing",
+          `AI agent extracted: category=${agentResult.extraction.category}, locations=${agentResult.extraction.locations.length}`,
+          "success",
+          {
+            decisionPath: agentResult.audit.decisionPath,
+            latencyMs: agentResult.audit.totalLatencyMs,
+            locationCount: agentResult.extraction.locations.length,
+          },
+          {
+            ...traceContext,
+            eventType: "end",
+            durationMs: Date.now() - pipelineStartedAtMs,
+          },
+        );
+
         await this.processWithAgentExtraction(
           agentResult.extraction,
           agentResult.audit.decisionPath,
@@ -340,11 +601,24 @@ export class RssIngestionService {
           dedupeFingerprints,
           fingerprint,
           item,
-        )
-        return
+          traceContext,
+        );
+        return;
       }
 
-      this.log(sourceUrl, headline, 'ai_processing', 'AI agent not available, falling back to rule-based extraction', 'info')
+      this.log(
+        sourceUrl,
+        headline,
+        "ai_processing",
+        "AI agent not available, falling back to rule-based extraction",
+        "info",
+        { reason: "ai_unavailable_or_failed" },
+        {
+          ...traceContext,
+          eventType: "end",
+          durationMs: Date.now() - pipelineStartedAtMs,
+        },
+      );
 
       await this.processWithRuleBasedExtraction(
         headline,
@@ -356,30 +630,47 @@ export class RssIngestionService {
         dedupeFingerprints,
         fingerprint,
         item,
-      )
+        traceContext,
+      );
     } catch (error) {
-      summary.errorCount += 1
+      summary.errorCount += 1;
 
-      this.log(sourceUrl, headline, 'error', `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+      this.log(
+        sourceUrl,
+        headline,
+        "error",
+        `Processing failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "error",
+        { failureType: "item_processing_failed" },
+        {
+          ...traceContext,
+          eventType: "error",
+          durationMs: Date.now() - itemStartedAtMs,
+        },
+      );
 
-      logger.error(
-        { error, feedUrl, sourceUrl },
-        'RSS item ingestion failed',
-      )
+      logger.error({ error, feedUrl, sourceUrl }, "RSS item ingestion failed");
 
       await this.repository.recordIngestionRun({
+        runId: executionContext.runId,
+        jobId: executionContext.jobId,
+        traceId,
         feedUrl,
-        decisionPath: 'Item_Processing_Failed',
-        status: 'FAILED',
-        errorMessage: error instanceof Error ? error.message : 'Unknown processing error',
+        sourceUrl,
+        headline,
+        step: "item_processing",
+        decisionPath: "Item_Processing_Failed",
+        status: "FAILED",
+        errorMessage:
+          error instanceof Error ? error.message : "Unknown processing error",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
-      })
+      });
     }
   }
 
   private async processWithAgentExtraction(
-    extraction: import('../types/ai.js').NewsExtraction,
+    extraction: import("../types/ai.js").NewsExtraction,
     agentDecisionPath: string,
     sourceUrl: string,
     rawSummary: string,
@@ -389,31 +680,69 @@ export class RssIngestionService {
     dedupeFingerprints: HeadlineFingerprint[],
     fingerprint: HeadlineFingerprint,
     item: RssItem,
+    traceContext: ProcessingTraceContext,
   ): Promise<void> {
-    const locations: CreateLocationInput[] = []
-    let anyGeocoded = false
+    const locations: CreateLocationInput[] = [];
+    let anyGeocoded = false;
 
-    let isFirst = true
+    let isFirst = true;
 
     for (const loc of extraction.locations) {
-      let latitude: number | null = null
-      let longitude: number | null = null
+      let latitude: number | null = null;
+      let longitude: number | null = null;
 
       if (loc.location_name || loc.city || loc.state) {
-        this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding location: ${loc.location_name ?? loc.city ?? loc.state}`, 'start')
+        const geocodeStartedAtMs = Date.now();
+
+        this.log(
+          sourceUrl,
+          extraction.headline,
+          "geocoding",
+          `Geocoding location: ${loc.location_name ?? loc.city ?? loc.state}`,
+          "start",
+          undefined,
+          { ...traceContext, eventType: "start" },
+        );
+
         const coordinates = await geocodeService.forwardGeocode({
-          locationName: loc.location_name ?? loc.city ?? loc.state ?? '',
+          locationName: loc.location_name ?? loc.city ?? loc.state ?? "",
           city: loc.city,
           state: loc.state,
-        })
+        });
+
+        const geocodeDurationMs = Date.now() - geocodeStartedAtMs;
 
         if (coordinates) {
-          latitude = coordinates.latitude
-          longitude = coordinates.longitude
-          anyGeocoded = true
-          this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoded to ${latitude}, ${longitude}`, 'success')
+          latitude = coordinates.latitude;
+          longitude = coordinates.longitude;
+          anyGeocoded = true;
+          this.log(
+            sourceUrl,
+            extraction.headline,
+            "geocoding",
+            `Geocoded to ${latitude}, ${longitude}`,
+            "success",
+            undefined,
+            {
+              ...traceContext,
+              eventType: "end",
+              durationMs: geocodeDurationMs,
+            },
+          );
         } else {
-          this.log(sourceUrl, extraction.headline, 'geocoding', `Geocoding returned no coordinates for: ${loc.location_name ?? loc.city ?? loc.state}`, 'warn')
+          this.log(
+            sourceUrl,
+            extraction.headline,
+            "geocoding",
+            `Geocoding returned no coordinates for: ${loc.location_name ?? loc.city ?? loc.state}`,
+            "warn",
+            { failureType: "geocode_not_found" },
+            {
+              ...traceContext,
+              eventType: "end",
+              durationMs: geocodeDurationMs,
+            },
+          );
         }
       }
 
@@ -424,20 +753,30 @@ export class RssIngestionService {
         isPrimary: isFirst,
         latitude,
         longitude,
-      })
-      isFirst = false
+      });
+      isFirst = false;
     }
 
-    const hasLocations = extraction.locations.length > 0
-    const isNational = !hasLocations || !anyGeocoded
+    const hasLocations = extraction.locations.length > 0;
+    const isNational = !hasLocations || !anyGeocoded;
 
     const category: NewsCategory = isNational
-      ? 'Uncategorized / National'
-      : extraction.category === 'Uncategorized / National'
-        ? 'General'
-        : extraction.category
+      ? "Uncategorized / National"
+      : extraction.category === "Uncategorized / National"
+        ? "General"
+        : extraction.category;
 
-    this.log(sourceUrl, extraction.headline, 'storage', `Storing news item with ${locations.length} location(s) in database`, 'start')
+    const storageStartedAtMs = Date.now();
+
+    this.log(
+      sourceUrl,
+      extraction.headline,
+      "storage",
+      `Storing news item with ${locations.length} location(s) in database`,
+      "start",
+      undefined,
+      { ...traceContext, eventType: "start" },
+    );
 
     const result = await this.repository.createNewsItem({
       sourceUrl,
@@ -447,48 +786,103 @@ export class RssIngestionService {
       isNational,
       publishedAt: resolvePublishedAt(item),
       locations,
-    })
+    });
 
     if (!result) {
-      summary.duplicateCount += 1
+      summary.duplicateCount += 1;
 
-      this.log(sourceUrl, extraction.headline, 'storage', 'Skipped: insert conflict', 'warn')
+      const storageDurationMs = Date.now() - storageStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        extraction.headline,
+        "storage",
+        "Skipped: insert conflict",
+        "warn",
+        { failureType: "db_insert_conflict_or_error" },
+        { ...traceContext, eventType: "end", durationMs: storageDurationMs },
+      );
 
       await this.repository.recordIngestionRun({
+        runId: traceContext.runId,
+        jobId: traceContext.jobId,
+        traceId: traceContext.traceId,
         feedUrl,
+        sourceUrl,
+        headline: extraction.headline,
+        step: "storage",
         decisionPath: `${agentDecisionPath} -> Insert_Conflict_or_Error`,
-        status: 'SKIPPED_CONFLICT',
+        status: "SKIPPED_CONFLICT",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
-      })
+      });
 
-      return
+      return;
     }
 
-    const locationSummary = result.locations.length > 0
-      ? ` - ${result.locations.map((l) => l.city ?? l.state ?? l.locationName ?? 'unknown').join(', ')}`
-      : ''
+    const locationSummary =
+      result.locations.length > 0
+        ? ` - ${result.locations.map((l) => l.city ?? l.state ?? l.locationName ?? "unknown").join(", ")}`
+        : "";
 
-    this.log(sourceUrl, extraction.headline, 'complete', `Article processed successfully [${category}]${isNational ? ' (national)' : locationSummary} (${result.locations.length} location(s))`, 'success')
+    const articleTraceContext: ProcessingTraceContext = {
+      ...traceContext,
+      articleId: result.item.id,
+    };
 
-    summary.inserted += 1
-    summary.locationCount += result.locations.length
+    this.log(
+      sourceUrl,
+      extraction.headline,
+      "storage",
+      `Stored news item ${result.item.id} with ${result.locations.length} location(s)`,
+      "success",
+      { locationCount: result.locations.length },
+      {
+        ...articleTraceContext,
+        eventType: "end",
+        durationMs: Date.now() - storageStartedAtMs,
+      },
+    );
+
+    this.log(
+      sourceUrl,
+      extraction.headline,
+      "complete",
+      `Article processed successfully [${category}]${isNational ? " (national)" : locationSummary} (${result.locations.length} location(s))`,
+      "success",
+      {
+        category,
+        isNational,
+        locationCount: result.locations.length,
+      },
+      { ...articleTraceContext, eventType: "end" },
+    );
+
+    summary.inserted += 1;
+    summary.locationCount += result.locations.length;
 
     if (result.item.isNational) {
-      summary.nationalCount += 1
+      summary.nationalCount += 1;
     }
 
-    dedupeFingerprints.push(fingerprint)
-    await cacheService.markProcessed(sourceUrl)
-    socketGateway.publishNewsCreated(result.item, result.locations)
+    dedupeFingerprints.push(fingerprint);
+    await cacheService.markProcessed(sourceUrl);
+    socketGateway.publishNewsCreated(result.item, result.locations);
 
     await this.repository.recordIngestionRun({
+      runId: traceContext.runId,
+      jobId: traceContext.jobId,
+      traceId: traceContext.traceId,
       feedUrl,
+      sourceUrl,
+      headline: extraction.headline,
+      newsItemId: result.item.id,
+      step: "complete",
       decisionPath: agentDecisionPath,
-      status: 'SUCCESS',
+      status: "SUCCESS",
       startedAt: itemStartedAt,
       finishedAt: new Date(),
-    })
+    });
   }
 
   private async processWithRuleBasedExtraction(
@@ -501,67 +895,157 @@ export class RssIngestionService {
     dedupeFingerprints: HeadlineFingerprint[],
     fingerprint: HeadlineFingerprint,
     item: RssItem,
+    traceContext: ProcessingTraceContext,
   ): Promise<void> {
     let fetchResult: FetchArticleContentOutput = {
       content: rawSummary,
-      decisionPath: 'RSS_Sufficient',
-      strategyUsed: 'rss',
-    }
+      decisionPath: "RSS_Sufficient",
+      strategyUsed: "rss",
+    };
 
-    this.log(sourceUrl, headline, 'content_fetch', `Fetching article content (RSS summary: ${rawSummary.length} chars)`, 'start')
+    const contentFetchStartedAtMs = Date.now();
 
-    fetchResult = await contentFetchService.fetchBestContent(sourceUrl, rawSummary)
+    this.log(
+      sourceUrl,
+      headline,
+      "content_fetch",
+      `Fetching article content (RSS summary: ${rawSummary.length} chars)`,
+      "start",
+      undefined,
+      { ...traceContext, eventType: "start" },
+    );
 
-    this.log(sourceUrl, headline, 'content_parse', `Content fetched via ${fetchResult.strategyUsed} (${fetchResult.content.length} chars)`, 'success', { strategy: fetchResult.strategyUsed })
+    fetchResult = await contentFetchService.fetchBestContent(
+      sourceUrl,
+      rawSummary,
+    );
 
-    const fullText = normalizeText(`${headline} ${fetchResult.content}`)
-    const baseCategory = categorizeArticle(fullText)
+    const contentFetchDurationMs = Date.now() - contentFetchStartedAtMs;
 
-    this.log(sourceUrl, headline, 'storage', `Storing news item as national (rule-based fallback, no AI location extraction)`, 'start')
+    this.log(
+      sourceUrl,
+      headline,
+      "content_parse",
+      `Content fetched via ${fetchResult.strategyUsed} (${fetchResult.content.length} chars)`,
+      "success",
+      { strategy: fetchResult.strategyUsed },
+      { ...traceContext, eventType: "end", durationMs: contentFetchDurationMs },
+    );
+
+    const fullText = normalizeText(`${headline} ${fetchResult.content}`);
+    const baseCategory = categorizeArticle(fullText);
+
+    const storageStartedAtMs = Date.now();
+
+    this.log(
+      sourceUrl,
+      headline,
+      "storage",
+      "Storing news item as national (rule-based fallback, no AI location extraction)",
+      "start",
+      undefined,
+      { ...traceContext, eventType: "start" },
+    );
 
     const result = await this.repository.createNewsItem({
       sourceUrl,
       headline,
-      summary: fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
-      category: baseCategory === 'General' ? 'Uncategorized / National' : baseCategory,
+      summary:
+        fetchResult.content.length > 0 ? fetchResult.content : rawSummary,
+      category:
+        baseCategory === "General" ? "Uncategorized / National" : baseCategory,
       isNational: true,
       publishedAt: resolvePublishedAt(item),
       locations: [],
-    })
+    });
 
     if (!result) {
-      summary.duplicateCount += 1
+      summary.duplicateCount += 1;
 
-      this.log(sourceUrl, headline, 'storage', 'Skipped: insert conflict', 'warn')
+      const storageDurationMs = Date.now() - storageStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        headline,
+        "storage",
+        "Skipped: insert conflict",
+        "warn",
+        { failureType: "db_insert_conflict_or_error" },
+        { ...traceContext, eventType: "end", durationMs: storageDurationMs },
+      );
 
       await this.repository.recordIngestionRun({
+        runId: traceContext.runId,
+        jobId: traceContext.jobId,
+        traceId: traceContext.traceId,
         feedUrl,
+        sourceUrl,
+        headline,
+        step: "storage",
         decisionPath: `${fetchResult.decisionPath} -> Insert_Conflict_or_Error`,
-        status: 'SKIPPED_CONFLICT',
+        status: "SKIPPED_CONFLICT",
         startedAt: itemStartedAt,
         finishedAt: new Date(),
-      })
+      });
 
-      return
+      return;
     }
 
-    summary.inserted += 1
-    summary.locationCount += result.locations.length
-    summary.nationalCount += 1
+    summary.inserted += 1;
+    summary.locationCount += result.locations.length;
+    summary.nationalCount += 1;
 
-    this.log(sourceUrl, headline, 'complete', `Article processed successfully [national] (rule-based fallback)`, 'success')
+    const articleTraceContext: ProcessingTraceContext = {
+      ...traceContext,
+      articleId: result.item.id,
+    };
 
-    dedupeFingerprints.push(fingerprint)
-    await cacheService.markProcessed(sourceUrl)
-    socketGateway.publishNewsCreated(result.item, result.locations)
+    this.log(
+      sourceUrl,
+      headline,
+      "storage",
+      `Stored national news item ${result.item.id}`,
+      "success",
+      { locationCount: 0 },
+      {
+        ...articleTraceContext,
+        eventType: "end",
+        durationMs: Date.now() - storageStartedAtMs,
+      },
+    );
+
+    this.log(
+      sourceUrl,
+      headline,
+      "complete",
+      "Article processed successfully [national] (rule-based fallback)",
+      "success",
+      {
+        category: result.item.category,
+        isNational: true,
+        locationCount: 0,
+      },
+      { ...articleTraceContext, eventType: "end" },
+    );
+
+    dedupeFingerprints.push(fingerprint);
+    await cacheService.markProcessed(sourceUrl);
+    socketGateway.publishNewsCreated(result.item, result.locations);
 
     await this.repository.recordIngestionRun({
+      runId: traceContext.runId,
+      jobId: traceContext.jobId,
+      traceId: traceContext.traceId,
       feedUrl,
+      sourceUrl,
+      headline,
+      newsItemId: result.item.id,
+      step: "complete",
       decisionPath: `RuleBased_Fallback -> ${fetchResult.decisionPath}`,
-      status: 'SUCCESS',
+      status: "SUCCESS",
       startedAt: itemStartedAt,
       finishedAt: new Date(),
-    })
+    });
   }
 
   private isLikelyDuplicate(
@@ -569,23 +1053,23 @@ export class RssIngestionService {
     existing: HeadlineFingerprint[],
   ): boolean {
     if (incoming.normalized.length === 0) {
-      return false
+      return false;
     }
 
     for (const candidate of existing) {
       if (incoming.normalized === candidate.normalized) {
-        return true
+        return true;
       }
 
-      const similarity = jaccardSimilarity(incoming.tokens, candidate.tokens)
+      const similarity = jaccardSimilarity(incoming.tokens, candidate.tokens);
 
       if (similarity >= 0.78) {
-        return true
+        return true;
       }
     }
 
-    return false
+    return false;
   }
 }
 
-export const rssIngestionService = new RssIngestionService()
+export const rssIngestionService = new RssIngestionService();

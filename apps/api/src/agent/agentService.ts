@@ -1,17 +1,17 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID } from "node:crypto";
 
-import { streamText, Output, stepCountIs } from 'ai'
+import { streamText, Output, stepCountIs } from "ai";
 
-import { aiModel, isAiEnabled } from '../config/ai.js'
-import { isDevToolsEnabled } from '../config/env.js'
-import { logger } from '../config/logger.js'
-import { fetchCrawl4aiTool, fetchStandardHtmlTool } from './tools.js'
+import { aiModel, isAiEnabled } from "../config/ai.js";
+import { logger } from "../config/logger.js";
+import { fetchCrawl4aiTool, fetchStandardHtmlTool } from "./tools.js";
 import {
   newsExtractionSchema,
   type AgentDecisionAudit,
   type AgentProcessResult,
-} from '../types/ai.js'
-import { processingEventBus } from '../services/processingEventBus.js'
+} from "../types/ai.js";
+import { processingEventBus } from "../services/processingEventBus.js";
+import type { ProcessingTraceContext } from "../types/processing.js";
 
 const SYSTEM_PROMPT = `You are a geo-spatial news extraction agent for Indian news articles.
 
@@ -64,20 +64,73 @@ Your task is to analyze news article content and extract structured data with a 
 - Extract ALL distinct locations mentioned, not just the primary one.
 - ALWAYS check the headline for location names — they are often embedded there and easy to miss.
 - If the article is about national-level news with no specific city/state, return an empty locations array and use category "Uncategorized / National".
-- Never fabricate or guess locations. If uncertain, omit that location.`
+- Never fabricate or guess locations. If uncertain, omit that location.`;
 
-const REASONING_FLUSH_INTERVAL_MS = 150
+const REASONING_FLUSH_INTERVAL_MS = 300;
 
-function formatTokenSummary(usage: { inputTokens?: number | undefined; outputTokens?: number | undefined }): string {
+function formatTokenSummary(usage: {
+  inputTokens?: number | undefined;
+  outputTokens?: number | undefined;
+}): string {
   return [
     usage.inputTokens != null ? `in=${usage.inputTokens}` : null,
     usage.outputTokens != null ? `out=${usage.outputTokens}` : null,
-  ].filter(Boolean).join(', ')
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function extractEstimatedCostUsd(
+  providerMetadata: unknown,
+): number | undefined {
+  if (!providerMetadata || typeof providerMetadata !== "object") {
+    return undefined;
+  }
+
+  const candidates = new Set([
+    "cost",
+    "costUsd",
+    "estimatedCostUsd",
+    "totalCost",
+    "total_cost",
+  ]);
+
+  const inspectRecord = (
+    value: Record<string, unknown>,
+  ): number | undefined => {
+    for (const [key, nestedValue] of Object.entries(value)) {
+      if (candidates.has(key)) {
+        if (typeof nestedValue === "number" && Number.isFinite(nestedValue)) {
+          return nestedValue;
+        }
+
+        if (typeof nestedValue === "string") {
+          const parsed = Number(nestedValue);
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+      }
+
+      if (nestedValue && typeof nestedValue === "object") {
+        const nestedCost = inspectRecord(
+          nestedValue as Record<string, unknown>,
+        );
+        if (nestedCost != null) {
+          return nestedCost;
+        }
+      }
+    }
+
+    return undefined;
+  };
+
+  return inspectRecord(providerMetadata as Record<string, unknown>);
 }
 
 export class AgentService {
   private isEnabled(): boolean {
-    return isAiEnabled()
+    return isAiEnabled();
   }
 
   async processArticle(
@@ -85,47 +138,67 @@ export class AgentService {
     content: string,
     sourceUrl: string,
     fullRssContent?: string,
+    traceContext: ProcessingTraceContext = {},
   ): Promise<AgentProcessResult | null> {
     if (!this.isEnabled()) {
-      logger.debug('OpenRouter API key not configured; skipping AI agent processing')
-      return null
+      logger.debug(
+        "OpenRouter API key not configured; skipping AI agent processing",
+      );
+      return null;
     }
 
-    const startedAt = Date.now()
-    const articleStreamId = randomUUID()
+    const startedAt = Date.now();
+    const articleStreamId = randomUUID();
 
-    if (isDevToolsEnabled) {
+    const emitProcessingEvent = (
+      entry: Omit<
+        Parameters<typeof processingEventBus.emitLog>[0],
+        "sourceUrl" | "headline"
+      >,
+    ): void => {
       processingEventBus.emitLog({
+        runId: traceContext.runId,
+        jobId: traceContext.jobId,
+        traceId: traceContext.traceId,
+        articleId: traceContext.articleId,
+        feedUrl: traceContext.feedUrl,
+        attempt: traceContext.attempt,
         sourceUrl,
         headline,
-        stage: 'ai_processing',
-        message: 'Streaming article to AI model...',
-        status: 'start',
-        streamId: articleStreamId,
-      })
-    }
+        ...entry,
+      });
+    };
+
+    emitProcessingEvent({
+      stage: "ai_processing",
+      message: "Streaming article to AI model...",
+      status: "start",
+      eventType: "start",
+      streamId: articleStreamId,
+    });
 
     const audit: AgentDecisionAudit = {
-      decisionPath: 'Agent_Invoked',
+      decisionPath: "Agent_Invoked",
       toolsInvoked: [],
       toolResults: [],
       extractionAttempts: 1,
       totalLatencyMs: 0,
-    }
+    };
 
-    const contentSection = fullRssContent && fullRssContent.length > content.length
-      ? `## RSS Summary:\n${content}\n\n## Full Article Content:\n${fullRssContent}`
-      : `## Content:\n${content}`
+    const contentSection =
+      fullRssContent && fullRssContent.length > content.length
+        ? `## RSS Summary:\n${content}\n\n## Full Article Content:\n${fullRssContent}`
+        : `## Content:\n${content}`;
 
     const userContent = [
       `## Article URL: ${sourceUrl}`,
       `## Headline: ${headline}`,
       contentSection,
-      '',
-      'Extract the structured data from this Indian news article.',
-      '**IMPORTANT**: First carefully scan the HEADLINE above for any Indian city, state, district, or region names. Then scan the content. Extract ALL locations found in either.',
-      'If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.',
-    ].join('\n')
+      "",
+      "Extract the structured data from this Indian news article.",
+      "**IMPORTANT**: First carefully scan the HEADLINE above for any Indian city, state, district, or region names. Then scan the content. Extract ALL locations found in either.",
+      "If the content above lacks sufficient geographic detail, use the available tools to fetch the full article from the URL before producing your final extraction.",
+    ].join("\n");
 
     try {
       const result = streamText({
@@ -138,236 +211,241 @@ export class AgentService {
           fetch_standard_html: fetchStandardHtmlTool,
         },
         stopWhen: stepCountIs(4),
-      })
+      });
 
-      let reasoningBuffer = ''
-      let lastReasoningFlush = 0
-      let reasoningStreamId: string | undefined
-      let stepNumber = 0
+      let reasoningBuffer = "";
+      let lastReasoningFlush = 0;
+      let reasoningStreamId: string | undefined;
+      let stepNumber = 0;
 
       for await (const chunk of result.fullStream) {
         switch (chunk.type) {
-          case 'start-step': {
-            stepNumber += 1
+          case "start-step": {
+            stepNumber += 1;
             if (reasoningBuffer.length > 0) {
-              if (isDevToolsEnabled) {
-                processingEventBus.emitLog({
-                  sourceUrl,
-                  headline,
-                  stage: 'ai_reasoning',
-                  message: reasoningBuffer,
-                  status: 'info',
-                  streamId: reasoningStreamId,
-                  isStreaming: false,
-                  metadata: { reasoningLength: reasoningBuffer.length },
-                })
-              }
-              reasoningBuffer = ''
-              reasoningStreamId = undefined
+              emitProcessingEvent({
+                stage: "ai_reasoning",
+                message: reasoningBuffer,
+                status: "info",
+                eventType: "end",
+                streamId: reasoningStreamId,
+                isStreaming: false,
+                metadata: { reasoningLength: reasoningBuffer.length },
+              });
+              reasoningBuffer = "";
+              reasoningStreamId = undefined;
             }
-            if (isDevToolsEnabled) {
-              processingEventBus.emitLog({
-                sourceUrl,
-                headline,
-                stage: 'ai_processing',
-                message: `LLM step ${stepNumber} started...`,
-                status: 'start',
-                streamId: articleStreamId,
-                metadata: { stepNumber },
-              })
-            }
-            break
+            emitProcessingEvent({
+              stage: "ai_processing",
+              message: `LLM step ${stepNumber} started...`,
+              status: "start",
+              eventType: "start",
+              streamId: articleStreamId,
+              metadata: { stepNumber },
+            });
+            break;
           }
 
-          case 'reasoning-delta': {
-            reasoningBuffer += chunk.text
+          case "reasoning-delta": {
+            reasoningBuffer += chunk.text;
             if (!reasoningStreamId) {
-              reasoningStreamId = randomUUID()
+              reasoningStreamId = randomUUID();
             }
-            if (isDevToolsEnabled) {
-              const now = Date.now()
-              if (now - lastReasoningFlush >= REASONING_FLUSH_INTERVAL_MS) {
-                lastReasoningFlush = now
-                processingEventBus.emitLog({
-                  sourceUrl,
-                  headline,
-                  stage: 'ai_reasoning',
-                  message: reasoningBuffer,
-                  status: 'info',
-                  streamId: reasoningStreamId,
-                  isStreaming: true,
-                })
-              }
+            const now = Date.now();
+            if (now - lastReasoningFlush >= REASONING_FLUSH_INTERVAL_MS) {
+              const delta = reasoningBuffer;
+              reasoningBuffer = "";
+              lastReasoningFlush = now;
+              emitProcessingEvent({
+                stage: "ai_reasoning",
+                message: delta,
+                status: "info",
+                eventType: "checkpoint",
+                streamId: reasoningStreamId,
+                isStreaming: true,
+                metadata: { reasoningChunkLength: delta.length },
+              });
             }
-            break
+            break;
           }
 
-          case 'reasoning-end': {
+          case "reasoning-end": {
             if (reasoningBuffer.length > 0) {
-              if (isDevToolsEnabled) {
-                processingEventBus.emitLog({
-                  sourceUrl,
-                  headline,
-                  stage: 'ai_reasoning',
-                  message: reasoningBuffer,
-                  status: 'info',
-                  streamId: reasoningStreamId,
-                  isStreaming: false,
-                  metadata: { reasoningLength: reasoningBuffer.length },
-                })
-              }
-              reasoningBuffer = ''
-              reasoningStreamId = undefined
+              emitProcessingEvent({
+                stage: "ai_reasoning",
+                message: reasoningBuffer,
+                status: "info",
+                eventType: "end",
+                streamId: reasoningStreamId,
+                isStreaming: false,
+                metadata: { reasoningLength: reasoningBuffer.length },
+              });
+              reasoningBuffer = "";
+              reasoningStreamId = undefined;
             }
-            break
+            break;
           }
 
-          case 'tool-call': {
-            audit.toolsInvoked.push(chunk.toolName)
-            if (isDevToolsEnabled) {
-              processingEventBus.emitLog({
-                sourceUrl,
-                headline,
-                stage: 'ai_tool_call',
-                message: `Invoking tool: ${chunk.toolName}`,
-                status: 'info',
-                streamId: articleStreamId,
-                metadata: { toolName: chunk.toolName },
-              })
-            }
-            break
+          case "tool-call": {
+            audit.toolsInvoked.push(chunk.toolName);
+            emitProcessingEvent({
+              stage: "ai_tool_call",
+              message: `Invoking tool: ${chunk.toolName}`,
+              status: "info",
+              eventType: "start",
+              streamId: articleStreamId,
+              metadata: { toolName: chunk.toolName },
+            });
+            break;
           }
 
-          case 'tool-result': {
+          case "tool-result": {
             const resultData = chunk.output as
               | { success: boolean; error?: string | null }
-              | undefined
-            const success = resultData?.success ?? false
+              | undefined;
+            const success = resultData?.success ?? false;
 
             audit.toolResults.push({
               tool: chunk.toolName,
               success,
               latencyMs: 0,
-            })
-            audit.extractionAttempts += 1
+            });
+            audit.extractionAttempts += 1;
 
-            if (isDevToolsEnabled) {
-              processingEventBus.emitLog({
-                sourceUrl,
-                headline,
-                stage: 'ai_tool_call',
-                message: `Tool ${chunk.toolName} ${success ? 'succeeded' : 'failed'}`,
-                status: success ? 'success' : 'warn',
-                streamId: articleStreamId,
-                metadata: { toolName: chunk.toolName, success },
-              })
-            }
-            break
+            emitProcessingEvent({
+              stage: "ai_tool_call",
+              message: `Tool ${chunk.toolName} ${success ? "succeeded" : "failed"}`,
+              status: success ? "success" : "warn",
+              eventType: "end",
+              streamId: articleStreamId,
+              metadata: {
+                toolName: chunk.toolName,
+                success,
+                ...(success ? {} : { failureType: "ai_tool_failed" }),
+              },
+            });
+            break;
           }
 
-          case 'finish-step': {
-            if (isDevToolsEnabled) {
-              const stepTokenSummary = formatTokenSummary(chunk.usage)
-              processingEventBus.emitLog({
-                sourceUrl,
-                headline,
-                stage: 'ai_processing',
-                message: `Step ${stepNumber} done [${stepTokenSummary}] reason=${chunk.finishReason}`,
-                status: 'success',
-                streamId: articleStreamId,
-                metadata: {
-                  stepNumber,
-                  finishReason: chunk.finishReason,
-                  inputTokens: chunk.usage.inputTokens,
-                  outputTokens: chunk.usage.outputTokens,
-                  providerMetadata: chunk.providerMetadata,
-                },
-              })
-            }
-            break
+          case "finish-step": {
+            const stepTokenSummary = formatTokenSummary(chunk.usage);
+            emitProcessingEvent({
+              stage: "ai_processing",
+              message: `Step ${stepNumber} done [${stepTokenSummary}] reason=${chunk.finishReason}`,
+              status: "success",
+              eventType: "end",
+              streamId: articleStreamId,
+              metadata: {
+                stepNumber,
+                finishReason: chunk.finishReason,
+                inputTokens: chunk.usage.inputTokens,
+                outputTokens: chunk.usage.outputTokens,
+                providerMetadata: chunk.providerMetadata,
+              },
+            });
+            break;
           }
 
-          case 'error': {
-            if (isDevToolsEnabled) {
-              processingEventBus.emitLog({
-                sourceUrl,
-                headline,
-                stage: 'error',
-                message: `Stream error: ${chunk.error instanceof Error ? chunk.error.message : 'Unknown error'}`,
-                status: 'error',
-                streamId: articleStreamId,
-              })
-            }
-            break
+          case "error": {
+            emitProcessingEvent({
+              stage: "error",
+              message: `Stream error: ${chunk.error instanceof Error ? chunk.error.message : "Unknown error"}`,
+              status: "error",
+              eventType: "error",
+              streamId: articleStreamId,
+              metadata: { failureType: "ai_stream_error" },
+            });
+            break;
           }
         }
       }
 
-      const [totalUsage, extraction, steps, providerMetadataResult, reasoningText] = await Promise.all([
+      const [
+        totalUsage,
+        extraction,
+        steps,
+        providerMetadataResult,
+        reasoningText,
+      ] = await Promise.all([
         result.totalUsage,
         result.output,
         result.steps,
         result.providerMetadata,
         result.reasoningText,
-      ])
+      ]);
 
-      audit.totalLatencyMs = Date.now() - startedAt
+      audit.totalLatencyMs = Date.now() - startedAt;
 
-      const reasoningTokens = totalUsage.outputTokenDetails?.reasoningTokens ?? undefined
+      const reasoningTokens =
+        totalUsage.outputTokenDetails?.reasoningTokens ?? undefined;
 
       audit.tokensUsed = {
         prompt: totalUsage.inputTokens ?? undefined,
         completion: totalUsage.outputTokens ?? undefined,
         total: totalUsage.totalTokens ?? undefined,
         reasoning: reasoningTokens,
-      }
+      };
 
       if (audit.totalLatencyMs > 0 && totalUsage.totalTokens) {
-        audit.throughputTokensPerSecond = Math.round((totalUsage.totalTokens / audit.totalLatencyMs) * 1000)
+        audit.throughputTokensPerSecond = Math.round(
+          (totalUsage.totalTokens / audit.totalLatencyMs) * 1000,
+        );
       }
 
-      audit.reasoningText = reasoningText
+      audit.reasoningText = reasoningText;
 
       if (providerMetadataResult) {
-        audit.providerMetadata = providerMetadataResult as Record<string, unknown>
+        audit.providerMetadata = providerMetadataResult as Record<
+          string,
+          unknown
+        >;
       }
+
+      const estimatedCostUsd = extractEstimatedCostUsd(providerMetadataResult);
 
       if (audit.toolsInvoked.length === 0) {
-        audit.decisionPath = 'Agent_RSS_Sufficient'
+        audit.decisionPath = "Agent_RSS_Sufficient";
       } else {
         const toolSummary = audit.toolResults
-          .map((t) => `${t.tool} -> ${t.success ? 'Success' : 'Failed'}`)
-          .join(' -> ')
-        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`
+          .map((t) => `${t.tool} -> ${t.success ? "Success" : "Failed"}`)
+          .join(" -> ");
+        audit.decisionPath = `Agent_Invoked -> ${toolSummary} -> Extracted`;
       }
 
-      if (isDevToolsEnabled) {
-        const finalTokenSummary = [
-          totalUsage.inputTokens != null ? `in=${totalUsage.inputTokens}` : null,
-          totalUsage.outputTokens != null ? `out=${totalUsage.outputTokens}` : null,
-          reasoningTokens != null ? `reasoning=${reasoningTokens}` : null,
-          totalUsage.totalTokens != null ? `total=${totalUsage.totalTokens}` : null,
-          audit.throughputTokensPerSecond != null ? `${audit.throughputTokensPerSecond} tok/s` : null,
-        ].filter(Boolean).join(', ')
+      const finalTokenSummary = [
+        totalUsage.inputTokens != null ? `in=${totalUsage.inputTokens}` : null,
+        totalUsage.outputTokens != null
+          ? `out=${totalUsage.outputTokens}`
+          : null,
+        reasoningTokens != null ? `reasoning=${reasoningTokens}` : null,
+        totalUsage.totalTokens != null
+          ? `total=${totalUsage.totalTokens}`
+          : null,
+        audit.throughputTokensPerSecond != null
+          ? `${audit.throughputTokensPerSecond} tok/s`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
 
-        processingEventBus.emitLog({
-          sourceUrl,
-          headline,
-          stage: 'ai_processing',
-          message: `Stream complete [${finalTokenSummary}] in ${audit.totalLatencyMs}ms (${steps.length} steps)`,
-          status: 'success',
-          streamId: articleStreamId,
-          metadata: {
-            inputTokens: totalUsage.inputTokens,
-            outputTokens: totalUsage.outputTokens,
-            reasoningTokens,
-            totalTokens: totalUsage.totalTokens,
-            throughputTokensPerSecond: audit.throughputTokensPerSecond,
-            latencyMs: audit.totalLatencyMs,
-            providerMetadata: providerMetadataResult,
-          },
-        })
-      }
+      emitProcessingEvent({
+        stage: "ai_processing",
+        message: `Stream complete [${finalTokenSummary}] in ${audit.totalLatencyMs}ms (${steps.length} steps)`,
+        status: "success",
+        eventType: "end",
+        durationMs: audit.totalLatencyMs,
+        streamId: articleStreamId,
+        metadata: {
+          inputTokens: totalUsage.inputTokens,
+          outputTokens: totalUsage.outputTokens,
+          reasoningTokens,
+          totalTokens: totalUsage.totalTokens,
+          estimatedCostUsd,
+          throughputTokensPerSecond: audit.throughputTokensPerSecond,
+          latencyMs: audit.totalLatencyMs,
+          providerMetadata: providerMetadataResult,
+        },
+      });
 
       logger.info(
         {
@@ -380,26 +458,27 @@ export class AgentService {
           reasoningTokens,
           category: extraction.category,
           locationCount: extraction.locations.length,
-          locations: extraction.locations.map((l) => `${l.city ?? l.state ?? l.location_name ?? 'unknown'}`),
+          locations: extraction.locations.map(
+            (l) => `${l.city ?? l.state ?? l.location_name ?? "unknown"}`,
+          ),
         },
-        'AI agent successfully processed article',
-      )
+        "AI agent successfully processed article",
+      );
 
-      return { extraction, audit }
+      return { extraction, audit };
     } catch (error) {
-      audit.totalLatencyMs = Date.now() - startedAt
-      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`
+      audit.totalLatencyMs = Date.now() - startedAt;
+      audit.decisionPath = `${audit.decisionPath} -> Agent_Failed`;
 
-      if (isDevToolsEnabled) {
-        processingEventBus.emitLog({
-          sourceUrl,
-          headline,
-          stage: 'error',
-          message: `AI agent failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          status: 'error',
-          streamId: articleStreamId,
-        })
-      }
+      emitProcessingEvent({
+        stage: "error",
+        message: `AI agent failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        status: "error",
+        eventType: "error",
+        durationMs: audit.totalLatencyMs,
+        streamId: articleStreamId,
+        metadata: { failureType: "ai_agent_failed" },
+      });
 
       logger.error(
         {
@@ -408,12 +487,12 @@ export class AgentService {
           decisionPath: audit.decisionPath,
           totalLatencyMs: audit.totalLatencyMs,
         },
-        'AI agent processing failed',
-      )
+        "AI agent processing failed",
+      );
 
-      return null
+      return null;
     }
   }
 }
 
-export const agentService = new AgentService()
+export const agentService = new AgentService();

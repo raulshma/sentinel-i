@@ -1,9 +1,15 @@
-import { Router } from 'express'
+import { Router } from "express";
 
-import { getProcessingLogs } from '../controllers/processing.controller.js'
+import {
+  getProcessingAnalytics,
+  getProcessingLogs,
+  getProcessingTimeline,
+} from "../controllers/processing.controller.js";
 
-const processingRouter = Router()
+const processingRouter = Router();
 
-processingRouter.get('/logs', getProcessingLogs)
+processingRouter.get("/logs", getProcessingLogs);
+processingRouter.get("/timeline", getProcessingTimeline);
+processingRouter.get("/analytics", getProcessingAnalytics);
 
-export { processingRouter }
+export { processingRouter };

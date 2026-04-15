@@ -30,10 +30,23 @@ CREATE INDEX IF NOT EXISTS idx_news_item_locations_news_item_id ON news_item_loc
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
   id BIGSERIAL PRIMARY KEY,
+  run_id TEXT,
+  job_id TEXT,
+  trace_id TEXT,
   feed_url TEXT NOT NULL,
+  source_url TEXT,
+  headline TEXT,
+  news_item_id UUID REFERENCES news_items(id) ON DELETE SET NULL,
+  step TEXT,
   decision_path TEXT NOT NULL,
   status TEXT NOT NULL,
   error_message TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   finished_at TIMESTAMPTZ
 );
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_run_id ON ingestion_runs (run_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_job_id ON ingestion_runs (job_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_trace_id ON ingestion_runs (trace_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_source_url ON ingestion_runs (source_url);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_started_at ON ingestion_runs (started_at DESC);
