@@ -7,14 +7,56 @@ import {
   MapControls,
   MapPopup,
   MapRoute,
+  MapTileSelector,
   useMap,
   type MapViewport,
+  type TileStyle,
 } from "@/components/ui/map";
 import {
   CATEGORY_COLORS,
   type MapFeature,
   type NewsCategory,
 } from "@/types/map";
+
+const TILE_STYLES: TileStyle[] = [
+  {
+    id: "dark",
+    label: "Dark",
+  },
+  {
+    id: "positron",
+    label: "Positron",
+  },
+  {
+    id: "bright",
+    label: "Bright",
+  },
+  {
+    id: "liberty",
+    label: "Liberty",
+  },
+];
+
+const TILE_URLS: Record<string, { light: string; dark: string }> = {
+  dark: {
+    light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  },
+  positron: {
+    light: "https://tiles.openfreemap.org/styles/positron",
+    dark: "https://tiles.openfreemap.org/styles/positron",
+  },
+  bright: {
+    light: "https://tiles.openfreemap.org/styles/bright",
+    dark: "https://tiles.openfreemap.org/styles/bright",
+  },
+  liberty: {
+    light: "https://tiles.openfreemap.org/styles/liberty",
+    dark: "https://tiles.openfreemap.org/styles/liberty",
+  },
+};
+
+const TILE_STORAGE_KEY = "sentinel-i:tile-style";
 
 function normalizeCities(cities: unknown): string[] {
   if (Array.isArray(cities)) return cities;
@@ -85,6 +127,27 @@ export function MapComponent({
 }: MapComponentProps) {
   const mapCenter = initialCenter ?? INDIA_CENTER;
   const mapZoom = initialZoom ?? DEFAULT_ZOOM;
+
+  const [tileStyle, setTileStyle] = useState(() => {
+    try {
+      const saved = localStorage.getItem(TILE_STORAGE_KEY);
+      if (saved && TILE_URLS[saved]) return saved;
+    } catch { /* localStorage unavailable */ }
+    return "dark";
+  });
+
+  const handleTileStyleChange = useCallback((id: string) => {
+    if (!TILE_URLS[id]) return;
+    setTileStyle(id);
+    try {
+      localStorage.setItem(TILE_STORAGE_KEY, id);
+    } catch { /* localStorage unavailable */ }
+  }, []);
+
+  const tileStyles = useMemo(
+    () => TILE_URLS[tileStyle] ?? TILE_URLS.dark,
+    [tileStyle],
+  );
 
   const [selectedPoint, setSelectedPoint] = useState<{
     coordinates: [number, number];
@@ -248,6 +311,7 @@ export function MapComponent({
         minZoom={3}
         maxZoom={16}
         theme="dark"
+        styles={tileStyles}
         onViewportChange={handleViewportChange}
       >
         {articleGroups.map((group) => {
@@ -291,6 +355,13 @@ export function MapComponent({
         />
 
         <MapControls position="bottom-right" showZoom showCompass={false} />
+
+        <MapTileSelector
+          position="bottom-left"
+          styles={TILE_STYLES}
+          value={tileStyle}
+          onChange={handleTileStyleChange}
+        />
 
         {selectedPoint && (
           <MapPopup

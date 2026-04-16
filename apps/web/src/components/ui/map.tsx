@@ -17,7 +17,15 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { X, Minus, Plus, Locate, Maximize, Loader2 } from "lucide-react";
+import {
+  X,
+  Minus,
+  Plus,
+  Locate,
+  Maximize,
+  Loader2,
+  Layers,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -1504,6 +1512,92 @@ function MapClusterLayer<
   return null;
 }
 
+type TileStyle = {
+  id: string;
+  label: string;
+};
+
+type MapTileSelectorProps = {
+  styles: TileStyle[];
+  value: string;
+  onChange: (id: string) => void;
+  position?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+};
+
+function MapTileSelector({
+  styles,
+  value,
+  onChange,
+  position = "bottom-right",
+}: MapTileSelectorProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-tile-selector]")) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, [isOpen]);
+
+  const selected = styles.find((s) => s.id === value);
+
+  return (
+    <div
+      className={cn("absolute z-10", positionClasses[position])}
+      data-tile-selector
+    >
+      <div className="relative">
+        <ControlGroup>
+          <ControlButton
+            onClick={() => setIsOpen((prev) => !prev)}
+            label={`Map style: ${selected?.label ?? "Default"}`}
+          >
+            <Layers className="size-4" />
+          </ControlButton>
+        </ControlGroup>
+
+        {isOpen && (
+          <div
+            className={cn(
+              "absolute bottom-full mb-1.5 left-0",
+              "bg-background border-border rounded-md border shadow-lg",
+              "min-w-[120px] py-1 animate-in fade-in-0 zoom-in-95",
+            )}
+          >
+            {styles.map((style) => (
+              <button
+                key={style.id}
+                type="button"
+                onClick={() => {
+                  onChange(style.id);
+                  setIsOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors",
+                  value === style.id
+                    ? "bg-accent text-accent-foreground font-medium"
+                    : "hover:bg-accent/50 text-foreground",
+                )}
+              >
+                {value === style.id && (
+                  <span className="text-accent-foreground">✓</span>
+                )}
+                {value !== style.id && <span className="w-3" />}
+                {style.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export {
   Map,
   useMap,
@@ -1516,6 +1610,7 @@ export {
   MapControls,
   MapRoute,
   MapClusterLayer,
+  MapTileSelector,
 };
 
-export type { MapRef, MapViewport };
+export type { MapRef, MapViewport, TileStyle };
