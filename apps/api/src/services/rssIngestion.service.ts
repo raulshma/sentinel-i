@@ -5,6 +5,7 @@ import Parser from "rss-parser";
 
 import { agentService } from "../agent/agentService.js";
 import { cacheService } from "./cache.service.js";
+import { env } from "../config/env.js";
 import { rssFeedSources } from "../config/rssFeeds.js";
 import { logger } from "../config/logger.js";
 import {
@@ -19,6 +20,11 @@ import {
 } from "./contentFetch.service.js";
 import { geocodeService } from "./geocode.service.js";
 import { processingEventBus } from "./processingEventBus.js";
+import { canonicalizeArticleUrl } from "../utils/articleUrl.js";
+import {
+  isOperationTimeoutError,
+  withPromiseTimeout,
+} from "../utils/withTimeout.js";
 import type {
   ProcessingEventType,
   ProcessingTraceContext,
@@ -32,10 +38,6 @@ type RssItem = {
   isoDate?: string;
   content?: string;
   contentSnippet?: string;
-};
-
-type RssFeed = {
-  items: RssItem[];
 };
 
 interface HeadlineFingerprint {
@@ -1075,6 +1077,65 @@ export class RssIngestionService {
     });
   }
 
+  private async handleDedupeCheckFailure(
+    sourceUrl: string,
+    headline: string,
+    feedUrl: string,
+    itemStartedAt: Date,
+    summary: RssIngestionSummary,
+    traceContext: ProcessingTraceContext,
+    dedupeStartedAtMs: number,
+    dependency: "content_hash_db" | "url_cache",
+  ): Promise<void> {
+    summary.errorCount += 1;
+
+    const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
+    const dependencyLabel =
+      dependency === "content_hash_db"
+        ? "content-hash database lookup"
+        : "Valkey URL dedupe cache lookup";
+    const failureType =
+      dependency === "content_hash_db"
+        ? "dedupe_content_hash_check_failed"
+        : "dedupe_valkey_cache_check_failed";
+    const decisionPath =
+      dependency === "content_hash_db"
+        ? "Dedupe_Content_Hash_Check_Failed"
+        : "Dedupe_Valkey_Cache_Check_Failed";
+
+    this.log(
+      sourceUrl,
+      headline,
+      "deduplication",
+      `Deduplication dependency unavailable: ${dependencyLabel}; item deferred for future cycle`,
+      "error",
+      {
+        failureType,
+        dependency: dependencyLabel,
+      },
+      {
+        ...traceContext,
+        eventType: "error",
+        durationMs: dedupeDurationMs,
+      },
+    );
+
+    await this.repository.recordIngestionRun({
+      runId: traceContext.runId,
+      jobId: traceContext.jobId,
+      traceId: traceContext.traceId,
+      feedUrl,
+      sourceUrl,
+      headline,
+      step: "deduplication",
+      decisionPath,
+      status: "FAILED",
+      errorMessage: `Deduplication check failed (${dependencyLabel})`,
+      startedAt: itemStartedAt,
+      finishedAt: new Date(),
+    });
+  }
+
   private normalizeExtractedLocations(
     rawLocations: import("../types/ai.js").NewsExtraction["locations"],
   ): NormalizedExtractedLocation[] {
@@ -1321,7 +1382,11 @@ export class RssIngestionService {
       );
 
       try {
-        const parsedFeed = (await parser.parseURL(feedUrl)) as RssFeed;
+        const parsedFeed = await withPromiseTimeout(
+          env.RSS_FEED_FETCH_TIMEOUT_MS,
+          () => parser.parseURL(feedUrl),
+          `RSS feed fetch timed out after ${env.RSS_FEED_FETCH_TIMEOUT_MS}ms`,
+        );
 
         const feedDurationMs = Date.now() - feedStartedAtMs;
 
@@ -1365,31 +1430,44 @@ export class RssIngestionService {
         summary.errorCount += 1;
 
         const feedDurationMs = Date.now() - feedStartedAtMs;
+        const isFeedTimeout = isOperationTimeoutError(error);
+        const failureMessage = isFeedTimeout
+          ? `RSS feed fetch timed out after ${env.RSS_FEED_FETCH_TIMEOUT_MS}ms`
+          : error instanceof Error
+            ? error.message
+            : "Unknown feed parse error";
 
         this.log(
           feedUrl,
           null,
           "feed_fetch",
-          `Feed parse failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          isFeedTimeout
+            ? failureMessage
+            : `Feed parse failed: ${failureMessage}`,
           "error",
-          { failureType: "feed_parse_failed" },
+          {
+            failureType: isFeedTimeout
+              ? "feed_fetch_timeout"
+              : "feed_parse_failed",
+          },
           { ...feedContext, eventType: "error", durationMs: feedDurationMs },
         );
 
         logger.error(
           { error, feedUrl },
-          "RSS feed parsing failed for ingestion cycle",
+          "RSS feed fetch/parse failed for ingestion cycle",
         );
 
         await this.repository.recordIngestionRun({
           runId: cycleContext.runId,
           jobId: cycleContext.jobId,
           feedUrl,
-          step: "feed_parse",
-          decisionPath: "Feed_Parse_Failed",
+          step: isFeedTimeout ? "feed_fetch" : "feed_parse",
+          decisionPath: isFeedTimeout
+            ? "Feed_Fetch_Timeout"
+            : "Feed_Parse_Failed",
           status: "FAILED",
-          errorMessage:
-            error instanceof Error ? error.message : "Unknown feed parse error",
+          errorMessage: failureMessage,
           startedAt: feedStartedAt,
           finishedAt: new Date(),
         });
@@ -1409,10 +1487,10 @@ export class RssIngestionService {
     summary: RssIngestionSummary,
     executionContext: IngestionExecutionContext,
   ): Promise<void> {
-    const sourceUrl = normalizeText(item.link ?? item.guid ?? "");
+    const rawSourceUrl = normalizeText(item.link ?? item.guid ?? "");
     const headline = normalizeText(item.title ?? "");
 
-    if (sourceUrl.length === 0 || headline.length === 0) {
+    if (rawSourceUrl.length === 0 || headline.length === 0) {
       return;
     }
 
@@ -1424,6 +1502,42 @@ export class RssIngestionService {
       feedUrl,
       attempt: executionContext.attempt,
     };
+
+    const sourceUrl = canonicalizeArticleUrl(rawSourceUrl);
+
+    if (!sourceUrl) {
+      summary.errorCount += 1;
+
+      this.log(
+        rawSourceUrl,
+        headline,
+        "deduplication",
+        "Rejected item: unsupported or invalid article URL",
+        "warn",
+        { failureType: "source_url_invalid" },
+        {
+          ...traceContext,
+          eventType: "checkpoint",
+        },
+      );
+
+      await this.repository.recordIngestionRun({
+        runId: executionContext.runId,
+        jobId: executionContext.jobId,
+        traceId,
+        feedUrl,
+        sourceUrl: rawSourceUrl,
+        headline,
+        step: "deduplication",
+        decisionPath: "Source_Url_Invalid",
+        status: "SKIPPED_INVALID",
+        errorMessage: "Unsupported or invalid article URL",
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      });
+
+      return;
+    }
 
     const itemStartedAtMs = Date.now();
     const dedupeStartedAtMs = Date.now();
@@ -1440,7 +1554,25 @@ export class RssIngestionService {
       { ...traceContext, eventType: "start" },
     );
 
-    if (await this.repository.existsByContentHash(contentHash)) {
+    const contentHashCheck =
+      await this.repository.existsByContentHash(contentHash);
+
+    if (contentHashCheck === "check_failed") {
+      await this.handleDedupeCheckFailure(
+        sourceUrl,
+        headline,
+        feedUrl,
+        itemStartedAt,
+        summary,
+        traceContext,
+        dedupeStartedAtMs,
+        "content_hash_db",
+      );
+
+      return;
+    }
+
+    if (contentHashCheck === "duplicate") {
       summary.duplicateCount += 1;
 
       const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
@@ -1475,7 +1607,24 @@ export class RssIngestionService {
       return;
     }
 
-    if (await cacheService.isDuplicate(sourceUrl)) {
+    const cacheDuplicateCheck = await cacheService.isDuplicate(sourceUrl);
+
+    if (cacheDuplicateCheck === "check_failed") {
+      await this.handleDedupeCheckFailure(
+        sourceUrl,
+        headline,
+        feedUrl,
+        itemStartedAt,
+        summary,
+        traceContext,
+        dedupeStartedAtMs,
+        "url_cache",
+      );
+
+      return;
+    }
+
+    if (cacheDuplicateCheck === "duplicate") {
       summary.duplicateCount += 1;
 
       const dedupeDurationMs = Date.now() - dedupeStartedAtMs;
@@ -1789,7 +1938,7 @@ export class RssIngestionService {
       contentHash,
     });
 
-    if (!result) {
+    if (result.status === "conflict") {
       summary.duplicateCount += 1;
 
       const storageDurationMs = Date.now() - storageStartedAtMs;
@@ -1800,7 +1949,7 @@ export class RssIngestionService {
         "storage",
         "Skipped: insert conflict",
         "warn",
-        { failureType: "db_insert_conflict_or_error" },
+        { failureType: "db_insert_conflict" },
         { ...traceContext, eventType: "end", durationMs: storageDurationMs },
       );
 
@@ -1812,8 +1961,45 @@ export class RssIngestionService {
         sourceUrl,
         headline: extraction.headline,
         step: "storage",
-        decisionPath: `${agentDecisionPath} -> ${locationResolutionPath} -> Insert_Conflict_or_Error`,
+        decisionPath: `${agentDecisionPath} -> ${locationResolutionPath} -> Insert_Conflict`,
         status: "SKIPPED_CONFLICT",
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      });
+
+      return;
+    }
+
+    if (result.status === "failed") {
+      summary.errorCount += 1;
+
+      const storageDurationMs = Date.now() - storageStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        extraction.headline,
+        "storage",
+        `Storage failed: ${result.errorMessage}`,
+        "error",
+        { failureType: "db_insert_failed" },
+        {
+          ...traceContext,
+          eventType: "error",
+          durationMs: storageDurationMs,
+        },
+      );
+
+      await this.repository.recordIngestionRun({
+        runId: traceContext.runId,
+        jobId: traceContext.jobId,
+        traceId: traceContext.traceId,
+        feedUrl,
+        sourceUrl,
+        headline: extraction.headline,
+        step: "storage",
+        decisionPath: `${agentDecisionPath} -> ${locationResolutionPath} -> Insert_Failed`,
+        status: "FAILED",
+        errorMessage: result.errorMessage,
         startedAt: itemStartedAt,
         finishedAt: new Date(),
       });
@@ -1923,14 +2109,26 @@ export class RssIngestionService {
     );
 
     const contentFetchDurationMs = Date.now() - contentFetchStartedAtMs;
+    const contentFetchFailed = fetchResult.strategyUsed === "none";
 
     this.log(
       sourceUrl,
       headline,
-      "content_parse",
-      `Content fetched via ${fetchResult.strategyUsed} (${fetchResult.content.length} chars)`,
-      "success",
-      { strategy: fetchResult.strategyUsed },
+      "content_fetch",
+      contentFetchFailed
+        ? `Content fetch failed across all strategies; falling back to RSS summary (${fetchResult.content.length} chars)`
+        : `Content fetched via ${fetchResult.strategyUsed} (${fetchResult.content.length} chars)`,
+      contentFetchFailed ? "warn" : "success",
+      {
+        strategy: fetchResult.strategyUsed,
+        decisionPath: fetchResult.decisionPath,
+        ...(contentFetchFailed
+          ? {
+              failureType: "content_fetch_all_failed",
+              fallbackSource: "rss_summary",
+            }
+          : {}),
+      },
       { ...traceContext, eventType: "end", durationMs: contentFetchDurationMs },
     );
 
@@ -1978,10 +2176,9 @@ export class RssIngestionService {
       );
     }
 
-    const category: NewsCategory =
-      isNational && baseCategory === "General"
-        ? "Uncategorized / National"
-        : baseCategory;
+    const category: NewsCategory = isNational
+      ? "Uncategorized / National"
+      : baseCategory;
 
     const storageStartedAtMs = Date.now();
 
@@ -2007,7 +2204,7 @@ export class RssIngestionService {
       contentHash,
     });
 
-    if (!result) {
+    if (result.status === "conflict") {
       summary.duplicateCount += 1;
 
       const storageDurationMs = Date.now() - storageStartedAtMs;
@@ -2018,7 +2215,7 @@ export class RssIngestionService {
         "storage",
         "Skipped: insert conflict",
         "warn",
-        { failureType: "db_insert_conflict_or_error" },
+        { failureType: "db_insert_conflict" },
         { ...traceContext, eventType: "end", durationMs: storageDurationMs },
       );
 
@@ -2030,8 +2227,45 @@ export class RssIngestionService {
         sourceUrl,
         headline,
         step: "storage",
-        decisionPath: `${fetchResult.decisionPath} -> ${locationResolutionPath} -> Insert_Conflict_or_Error`,
+        decisionPath: `${fetchResult.decisionPath} -> ${locationResolutionPath} -> Insert_Conflict`,
         status: "SKIPPED_CONFLICT",
+        startedAt: itemStartedAt,
+        finishedAt: new Date(),
+      });
+
+      return;
+    }
+
+    if (result.status === "failed") {
+      summary.errorCount += 1;
+
+      const storageDurationMs = Date.now() - storageStartedAtMs;
+
+      this.log(
+        sourceUrl,
+        headline,
+        "storage",
+        `Storage failed: ${result.errorMessage}`,
+        "error",
+        { failureType: "db_insert_failed" },
+        {
+          ...traceContext,
+          eventType: "error",
+          durationMs: storageDurationMs,
+        },
+      );
+
+      await this.repository.recordIngestionRun({
+        runId: traceContext.runId,
+        jobId: traceContext.jobId,
+        traceId: traceContext.traceId,
+        feedUrl,
+        sourceUrl,
+        headline,
+        step: "storage",
+        decisionPath: `${fetchResult.decisionPath} -> ${locationResolutionPath} -> Insert_Failed`,
+        status: "FAILED",
+        errorMessage: result.errorMessage,
         startedAt: itemStartedAt,
         finishedAt: new Date(),
       });

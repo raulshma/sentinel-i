@@ -27,7 +27,7 @@ export interface Coordinates {
 
 const FALLBACK_GEOCODE_BASE_URL = "https://nominatim.openstreetmap.org";
 const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (compatible; Sentinel-I/1.0; +https://example.local/sentinel-i)";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
 const GEOCODE_TIMEOUT_MS = 8_000;
 const CACHE_MAX_ENTRIES = 2_000;
 

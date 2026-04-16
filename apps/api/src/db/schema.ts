@@ -1,6 +1,7 @@
 import {
   boolean,
   bigserial,
+  customType,
   integer,
   index,
   jsonb,
@@ -10,6 +11,15 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+
+const geographyPoint = customType<{
+  data: string | null;
+  driverData: string | null;
+}>({
+  dataType() {
+    return "geography(POINT, 4326)";
+  },
+});
 
 export const newsItems = pgTable(
   "news_items",
@@ -43,7 +53,7 @@ export const newsItemLocations = pgTable(
     city: text("city"),
     state: text("state"),
     isPrimary: boolean("is_primary").notNull().default(false),
-    geom: text("geom"),
+    geom: geographyPoint("geom"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

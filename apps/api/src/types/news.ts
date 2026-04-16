@@ -12,6 +12,11 @@ export const NEWS_CATEGORIES = [
 
 export type NewsCategory = (typeof NEWS_CATEGORIES)[number];
 
+export type DuplicateCheckResult =
+  | "duplicate"
+  | "not_duplicate"
+  | "check_failed";
+
 export interface NewsItem {
   id: string;
   headline: string;
@@ -62,10 +67,19 @@ export interface CreateNewsItemInput {
   contentHash?: string;
 }
 
-export interface CreateNewsItemResult {
-  item: NewsItem;
-  locations: NewsItemLocation[];
-}
+export type CreateNewsItemResult =
+  | {
+      status: "inserted";
+      item: NewsItem;
+      locations: NewsItemLocation[];
+    }
+  | {
+      status: "conflict";
+    }
+  | {
+      status: "failed";
+      errorMessage: string;
+    };
 
 export interface ViewportQuery {
   minLng: number;

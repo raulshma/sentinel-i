@@ -1,23 +1,27 @@
-import { createServer } from 'node:http'
+import { createServer } from "node:http";
 
-import { createApp } from './app.js'
-import { closePgPool } from './config/db.js'
-import { env } from './config/env.js'
-import { logger } from './config/logger.js'
-import { closeValkey } from './config/valkey.js'
-import { closeRssQueue } from './queue/rssQueue.js'
-import { startRssScheduler, stopRssScheduler } from './queue/rssScheduler.js'
-import { startRetentionScheduler, stopRetentionScheduler } from './queue/retentionScheduler.js'
-import { socketGateway } from './socket/socketGateway.js'
-import { startRssWorker, stopRssWorker } from './workers/rssWorker.js'
+import { createApp } from "./app.js";
+import { closePgPool } from "./config/db.js";
+import { env } from "./config/env.js";
+import { logger } from "./config/logger.js";
+import { closeValkey } from "./config/valkey.js";
+import { closeRssQueue } from "./queue/rssQueue.js";
+import { startRssScheduler, stopRssScheduler } from "./queue/rssScheduler.js";
+import {
+  startRetentionScheduler,
+  stopRetentionScheduler,
+} from "./queue/retentionScheduler.js";
+import { processingEventBus } from "./services/processingEventBus.js";
+import { socketGateway } from "./socket/socketGateway.js";
+import { startRssWorker, stopRssWorker } from "./workers/rssWorker.js";
 
-const app = createApp()
-const server = createServer(app)
+const app = createApp();
+const server = createServer(app);
 
-socketGateway.attach(server)
-startRssScheduler()
-startRetentionScheduler()
-startRssWorker()
+socketGateway.attach(server);
+startRssScheduler();
+startRetentionScheduler();
+startRssWorker();
 
 server.listen(env.PORT, () => {
   logger.info(
@@ -26,51 +30,55 @@ server.listen(env.PORT, () => {
       environment: env.NODE_ENV,
       clientOrigin: env.CLIENT_ORIGIN,
     },
-    'API server listening',
-  )
-})
+    "API server listening",
+  );
+});
 
-let shuttingDown = false
+let shuttingDown = false;
 
 const shutdown = async (signal: string): Promise<void> => {
   if (shuttingDown) {
-    return
+    return;
   }
 
-  shuttingDown = true
+  shuttingDown = true;
 
-  logger.info({ signal }, 'Graceful shutdown started')
+  logger.info({ signal }, "Graceful shutdown started");
 
-  socketGateway.shutdown()
+  socketGateway.shutdown();
 
   await Promise.allSettled([
     stopRssScheduler(),
     stopRetentionScheduler(),
     stopRssWorker(),
     closeRssQueue(),
-    closePgPool(),
-    closeValkey(),
-  ])
+  ]);
+
+  await processingEventBus.shutdown({
+    drainTimeoutMs: env.PROCESSING_EVENT_DRAIN_TIMEOUT_MS,
+  });
+
+  await Promise.allSettled([closePgPool(), closeValkey()]);
 
   server.close((error) => {
     if (error) {
-      logger.error({ error }, 'Error while closing HTTP server')
-      process.exit(1)
+      logger.error({ error }, "Error while closing HTTP server");
+      process.exit(1);
     }
 
-    process.exit(0)
-  })
+    process.exit(0);
+  });
 
   setTimeout(() => {
-    logger.error('Shutdown timed out; forcing process exit')
-    process.exit(1)
-  }, 10_000).unref()
-}
+    logger.error("Shutdown timed out; forcing process exit");
+    process.exit(1);
+  }, 10_000).unref();
+};
 
-process.on('SIGINT', () => {
-  void shutdown('SIGINT')
-})
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
 
-process.on('SIGTERM', () => {
-  void shutdown('SIGTERM')
-})
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});

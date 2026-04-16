@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 
 import { getDb } from "../config/db.js";
 import { logger } from "../config/logger.js";
@@ -392,32 +392,35 @@ export class ProcessingLogRepository {
         .select()
         .from(processingLogs)
         .where(and(...conditions))
-        .orderBy(asc(processingLogs.createdAt), asc(processingLogs.id))
+        .orderBy(desc(processingLogs.createdAt), desc(processingLogs.id))
         .limit(limit);
 
-      const events = result.map(
-        (row): ProcessingLogEntry => ({
-          id: String(row.id),
-          runId: row.runId ?? undefined,
-          jobId: row.jobId ?? undefined,
-          traceId: row.traceId ?? undefined,
-          articleId: row.articleId ?? undefined,
-          sourceUrl: row.sourceUrl,
-          feedUrl: row.feedUrl ?? undefined,
-          eventType:
-            (row.eventType as ProcessingLogEntry["eventType"]) ?? "checkpoint",
-          durationMs: row.durationMs ?? undefined,
-          attempt: row.attempt ?? undefined,
-          headline: row.headline,
-          stage: row.stage as ProcessingLogEntry["stage"],
-          message: row.message,
-          status: row.status as ProcessingLogEntry["status"],
-          streamId: row.streamId ?? undefined,
-          isStreaming: row.isStreaming,
-          metadata: (row.metadata as Record<string, unknown>) ?? {},
-          createdAt: row.createdAt.toISOString(),
-        }),
-      );
+      const events = result
+        .map(
+          (row): ProcessingLogEntry => ({
+            id: String(row.id),
+            runId: row.runId ?? undefined,
+            jobId: row.jobId ?? undefined,
+            traceId: row.traceId ?? undefined,
+            articleId: row.articleId ?? undefined,
+            sourceUrl: row.sourceUrl,
+            feedUrl: row.feedUrl ?? undefined,
+            eventType:
+              (row.eventType as ProcessingLogEntry["eventType"]) ??
+              "checkpoint",
+            durationMs: row.durationMs ?? undefined,
+            attempt: row.attempt ?? undefined,
+            headline: row.headline,
+            stage: row.stage as ProcessingLogEntry["stage"],
+            message: row.message,
+            status: row.status as ProcessingLogEntry["status"],
+            streamId: row.streamId ?? undefined,
+            isStreaming: row.isStreaming,
+            metadata: (row.metadata as Record<string, unknown>) ?? {},
+            createdAt: row.createdAt.toISOString(),
+          }),
+        )
+        .reverse();
 
       return {
         events,

@@ -5,10 +5,12 @@ import { createHash } from "node:crypto";
 import { getDb } from "../config/db.js";
 import { logger } from "../config/logger.js";
 import { newsItems, newsItemLocations, ingestionRuns } from "../db/schema.js";
+import { canonicalizeArticleUrl } from "../utils/articleUrl.js";
 import {
   type ClusteredViewportQuery,
   type CreateNewsItemInput,
   type CreateNewsItemResult,
+  type DuplicateCheckResult,
   type IngestionRunInput,
   isNewsCategory,
   type MapCluster,
@@ -37,11 +39,15 @@ const normalizeCategory = (
 
 export class NewsRepository {
   static computeContentHash(headline: string, sourceUrl: string): string {
-    const normalized = `${headline.toLowerCase().trim()}|${sourceUrl.trim()}`;
+    const canonicalSourceUrl =
+      canonicalizeArticleUrl(sourceUrl) ?? sourceUrl.trim();
+    const normalized = `${headline.toLowerCase().trim()}|${canonicalSourceUrl}`;
     return createHash("sha256").update(normalized).digest("hex");
   }
 
-  async existsByContentHash(contentHash: string): Promise<boolean> {
+  async existsByContentHash(
+    contentHash: string,
+  ): Promise<DuplicateCheckResult> {
     try {
       const result = await getDb()
         .select({ id: newsItems.id })
@@ -49,13 +55,13 @@ export class NewsRepository {
         .where(eq(newsItems.contentHash, contentHash))
         .limit(1);
 
-      return result.length > 0;
+      return result.length > 0 ? "duplicate" : "not_duplicate";
     } catch (error) {
       logger.warn(
         { error, contentHash },
-        "Content hash lookup failed; assuming not duplicate",
+        "Content hash lookup failed; duplicate check unavailable",
       );
-      return false;
+      return "check_failed";
     }
   }
 
@@ -165,16 +171,23 @@ export class NewsRepository {
 
   async createNewsItem(
     input: CreateNewsItemInput,
-  ): Promise<CreateNewsItemResult | null> {
+  ): Promise<CreateNewsItemResult> {
     try {
       return await getDb().transaction(async (tx) => {
+        const persistedCategory = normalizeCategory(
+          input.category,
+          input.isNational,
+        );
+        const canonicalSourceUrl =
+          canonicalizeArticleUrl(input.sourceUrl) ?? input.sourceUrl.trim();
+
         const [itemRow] = await tx
           .insert(newsItems)
           .values({
-            sourceUrl: input.sourceUrl,
+            sourceUrl: canonicalSourceUrl,
             headline: input.headline,
             summary: input.summary,
-            category: input.category,
+            category: persistedCategory,
             isNational: input.isNational,
             publishedAt: new Date(input.publishedAt),
             contentHash: input.contentHash,
@@ -183,20 +196,27 @@ export class NewsRepository {
           .returning();
 
         if (!itemRow) {
-          return null;
+          return { status: "conflict" };
         }
 
         const locations: NewsItemLocation[] = [];
 
-        for (const loc of input.locations) {
-          const geomSql =
-            loc.latitude != null && loc.longitude != null
-              ? sql`ST_SetSRID(ST_MakePoint(${loc.longitude}::double precision, ${loc.latitude}::double precision), 4326)::geography`
-              : sql`NULL`;
+        if (input.locations.length > 0) {
+          const locationValues = sql.join(
+            input.locations.map((loc) => {
+              const geomSql =
+                loc.latitude != null && loc.longitude != null
+                  ? sql`ST_SetSRID(ST_MakePoint(${loc.longitude}::double precision, ${loc.latitude}::double precision), 4326)::geography`
+                  : sql`NULL`;
+
+              return sql`(${itemRow.id}, ${loc.locationName ?? null}, ${loc.city ?? null}, ${loc.state ?? null}, ${loc.isPrimary}, ${geomSql})`;
+            }),
+            sql`, `,
+          );
 
           const locRows = await tx.execute(sql`
             INSERT INTO ${newsItemLocations} (news_item_id, location_name, city, state, is_primary, geom)
-            VALUES (${itemRow.id}, ${loc.locationName ?? null}, ${loc.city ?? null}, ${loc.state ?? null}, ${loc.isPrimary}, ${geomSql})
+            VALUES ${locationValues}
             RETURNING
               id,
               news_item_id AS "newsItemId",
@@ -208,8 +228,7 @@ export class NewsRepository {
               CASE WHEN geom IS NULL THEN NULL ELSE ST_X(geom::geometry)::text END AS longitude
           `);
 
-          const row = locRows.rows[0];
-          if (row) {
+          for (const row of locRows.rows) {
             locations.push({
               id: row.id as string,
               newsItemId: row.newsItemId as string,
@@ -224,6 +243,7 @@ export class NewsRepository {
         }
 
         return {
+          status: "inserted",
           item: {
             id: itemRow.id,
             headline: itemRow.headline,
@@ -237,11 +257,17 @@ export class NewsRepository {
         };
       });
     } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown storage error";
+
       logger.error(
         { error, sourceUrl: input.sourceUrl },
         "Failed to insert news item with locations",
       );
-      return null;
+      return {
+        status: "failed",
+        errorMessage,
+      };
     }
   }
 
@@ -612,7 +638,12 @@ export class NewsRepository {
         isNational: row.is_national as boolean,
         publishedAt: new Date(row.published_at as string),
         locations: (
-          (row.locations_json as Array<Array<{ city: string | null; state: string | null }> | null>)?.[0] ?? []
+          (
+            row.locations_json as Array<Array<{
+              city: string | null;
+              state: string | null;
+            }> | null>
+          )?.[0] ?? []
         ).filter(
           (loc): loc is { city: string | null; state: string | null } =>
             loc !== null,

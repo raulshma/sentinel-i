@@ -44,15 +44,26 @@ export interface ProcessingLogEntry {
   createdAt: string;
 }
 
+export interface ProcessingEventBusShutdownOptions {
+  drainTimeoutMs?: number;
+}
+
 class ProcessingEventBus extends EventEmitter {
   private static readonly FLUSH_INTERVAL_MS = 120;
   private static readonly MAX_BATCH_SIZE = 300;
   private static readonly MAX_QUEUE_SIZE = 12_000;
+  private static readonly MAX_FLUSH_RETRIES = 3;
+  private static readonly FLUSH_RETRY_BASE_DELAY_MS = 300;
+  private static readonly FLUSH_RETRY_MAX_DELAY_MS = 5_000;
+  private static readonly SHUTDOWN_POLL_INTERVAL_MS = 25;
 
   private queue: ProcessingLogEntry[] = [];
   private flushing = false;
   private flushTimer: NodeJS.Timeout | null = null;
   private droppedEvents = 0;
+  private flushFailureCount = 0;
+  private shuttingDown = false;
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor() {
     super();
@@ -94,11 +105,8 @@ class ProcessingEventBus extends EventEmitter {
     }
 
     const overflow = this.queue.length - ProcessingEventBus.MAX_QUEUE_SIZE;
-
-    for (let i = 0; i < overflow; i += 1) {
-      this.queue.shift();
-      this.droppedEvents += 1;
-    }
+    this.queue.splice(0, overflow);
+    this.droppedEvents += overflow;
   }
 
   private scheduleFlush(): void {
@@ -106,7 +114,14 @@ class ProcessingEventBus extends EventEmitter {
       return;
     }
 
-    if (this.queue.length >= ProcessingEventBus.MAX_BATCH_SIZE) {
+    const delayMs = this.shuttingDown
+      ? 0
+      : ProcessingEventBus.FLUSH_INTERVAL_MS;
+
+    if (
+      this.queue.length >= ProcessingEventBus.MAX_BATCH_SIZE ||
+      delayMs <= 0
+    ) {
       void this.flush();
       return;
     }
@@ -118,8 +133,51 @@ class ProcessingEventBus extends EventEmitter {
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       void this.flush();
-    }, ProcessingEventBus.FLUSH_INTERVAL_MS);
+    }, delayMs);
     this.flushTimer.unref?.();
+  }
+
+  private getRetryDelayMs(attempt: number): number {
+    const exponential =
+      ProcessingEventBus.FLUSH_RETRY_BASE_DELAY_MS *
+      2 ** Math.max(attempt - 1, 0);
+
+    return Math.min(exponential, ProcessingEventBus.FLUSH_RETRY_MAX_DELAY_MS);
+  }
+
+  private scheduleRetryFlush(attempt: number): void {
+    if (this.flushing || this.queue.length === 0 || this.flushTimer) {
+      return;
+    }
+
+    const retryDelayMs = this.shuttingDown ? 0 : this.getRetryDelayMs(attempt);
+
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.flush();
+    }, retryDelayMs);
+    this.flushTimer.unref?.();
+  }
+
+  private mapToDbRows(batch: ProcessingLogEntry[]) {
+    return batch.map((e) => ({
+      runId: e.runId,
+      jobId: e.jobId,
+      traceId: e.traceId,
+      articleId: e.articleId,
+      sourceUrl: e.sourceUrl,
+      feedUrl: e.feedUrl,
+      eventType: e.eventType ?? "checkpoint",
+      durationMs: e.durationMs,
+      attempt: e.attempt,
+      headline: e.headline,
+      stage: e.stage,
+      message: e.message,
+      status: e.status,
+      streamId: e.streamId,
+      isStreaming: e.isStreaming ?? false,
+      metadata: e.metadata ?? {},
+    }));
   }
 
   private async flush(): Promise<void> {
@@ -133,43 +191,54 @@ class ProcessingEventBus extends EventEmitter {
     }
 
     this.flushing = true;
-    let inFlightBatchSize = 0;
+    let retryAttempt: number | null = null;
 
     try {
       const db = getDb();
 
       while (this.queue.length > 0) {
         const batch = this.queue.splice(0, ProcessingEventBus.MAX_BATCH_SIZE);
-        inFlightBatchSize = batch.length;
 
-        await db.insert(processingLogs).values(
-          batch.map((e) => ({
-            runId: e.runId,
-            jobId: e.jobId,
-            traceId: e.traceId,
-            articleId: e.articleId,
-            sourceUrl: e.sourceUrl,
-            feedUrl: e.feedUrl,
-            eventType: e.eventType ?? "checkpoint",
-            durationMs: e.durationMs,
-            attempt: e.attempt,
-            headline: e.headline,
-            stage: e.stage,
-            message: e.message,
-            status: e.status,
-            streamId: e.streamId,
-            isStreaming: e.isStreaming ?? false,
-            metadata: e.metadata ?? {},
-          })),
-        );
+        try {
+          await db.insert(processingLogs).values(this.mapToDbRows(batch));
+          this.flushFailureCount = 0;
+        } catch (error) {
+          this.flushFailureCount += 1;
 
-        inFlightBatchSize = 0;
+          if (this.flushFailureCount <= ProcessingEventBus.MAX_FLUSH_RETRIES) {
+            retryAttempt = this.flushFailureCount;
+            this.queue.unshift(...batch);
+
+            logger.warn(
+              {
+                error,
+                attempt: this.flushFailureCount,
+                maxAttempts: ProcessingEventBus.MAX_FLUSH_RETRIES,
+                retryDelayMs: this.getRetryDelayMs(this.flushFailureCount),
+                batchSize: batch.length,
+                queuedEvents: this.queue.length,
+              },
+              "Failed to flush processing logs batch; scheduling retry",
+            );
+          } else {
+            const dropped = batch.length;
+            this.droppedEvents += dropped;
+
+            logger.warn(
+              {
+                error,
+                dropped,
+                maxAttempts: ProcessingEventBus.MAX_FLUSH_RETRIES,
+              },
+              "Failed to flush processing logs batch after retries; dropping batch",
+            );
+
+            this.flushFailureCount = 0;
+          }
+
+          break;
+        }
       }
-    } catch (error) {
-      const dropped = this.queue.length + inFlightBatchSize;
-      logger.warn({ error, dropped }, "Failed to flush processing logs batch");
-      this.droppedEvents += dropped;
-      this.queue.length = 0;
     } finally {
       this.flushing = false;
 
@@ -182,9 +251,83 @@ class ProcessingEventBus extends EventEmitter {
       }
 
       if (this.queue.length > 0) {
+        if (retryAttempt != null) {
+          this.scheduleRetryFlush(retryAttempt);
+          return;
+        }
+
         this.scheduleFlush();
       }
     }
+  }
+
+  async shutdown(
+    options: ProcessingEventBusShutdownOptions = {},
+  ): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
+
+    const drainTimeoutMs = Math.max(options.drainTimeoutMs ?? 5_000, 1_000);
+    this.shuttingDown = true;
+
+    this.shutdownPromise = (async () => {
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      }
+
+      if (!this.flushing && this.queue.length > 0) {
+        await this.flush();
+      }
+
+      const deadline = Date.now() + drainTimeoutMs;
+      let drainTimedOut = false;
+
+      while (this.flushing || this.queue.length > 0) {
+        if (Date.now() >= deadline) {
+          drainTimedOut = true;
+          const pending = this.queue.length;
+
+          if (pending > 0) {
+            this.droppedEvents += pending;
+            this.queue.length = 0;
+          }
+
+          logger.warn(
+            {
+              pending,
+              flushing: this.flushing,
+              drainTimeoutMs,
+            },
+            "Processing event bus shutdown drain timed out",
+          );
+          break;
+        }
+
+        if (!this.flushing && this.queue.length > 0) {
+          await this.flush();
+          continue;
+        }
+
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(
+            resolve,
+            ProcessingEventBus.SHUTDOWN_POLL_INTERVAL_MS,
+          );
+          timer.unref?.();
+        });
+      }
+
+      if (!drainTimedOut && !this.flushing && this.queue.length === 0) {
+        logger.info(
+          { drainTimeoutMs },
+          "Processing event bus drained during shutdown",
+        );
+      }
+    })();
+
+    return this.shutdownPromise;
   }
 }
 

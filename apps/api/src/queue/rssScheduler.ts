@@ -2,7 +2,7 @@ import cron, { type ScheduledTask } from "node-cron";
 
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { rssSyncQueue } from "./rssQueue.js";
+import { enqueueRssSyncJob } from "./rssQueue.js";
 
 let schedulerTask: ScheduledTask | null = null;
 
@@ -11,15 +11,40 @@ export const startRssScheduler = (): void => {
     return;
   }
 
-  schedulerTask = cron.schedule(env.RSS_SYNC_CRON, async () => {
-    const job = await rssSyncQueue.add("sync-feeds", {
-      triggeredAt: new Date().toISOString(),
-    });
-
-    logger.info(
-      { schedule: env.RSS_SYNC_CRON, jobId: job.id },
-      "Queued scheduled RSS sync job",
+  if (!cron.validate(env.RSS_SYNC_CRON)) {
+    logger.error(
+      { schedule: env.RSS_SYNC_CRON },
+      "RSS scheduler received an invalid cron expression",
     );
+    throw new Error(`Invalid RSS_SYNC_CRON expression: ${env.RSS_SYNC_CRON}`);
+  }
+
+  schedulerTask = cron.schedule(env.RSS_SYNC_CRON, async () => {
+    try {
+      const result = await enqueueRssSyncJob(new Date().toISOString());
+
+      if (!result.enqueued) {
+        logger.info(
+          {
+            schedule: env.RSS_SYNC_CRON,
+            jobId: result.jobId,
+            state: result.state,
+          },
+          "Skipped scheduled RSS sync enqueue because a sync job is already in-flight",
+        );
+        return;
+      }
+
+      logger.info(
+        { schedule: env.RSS_SYNC_CRON, jobId: result.jobId },
+        "Queued scheduled RSS sync job",
+      );
+    } catch (error) {
+      logger.error(
+        { error, schedule: env.RSS_SYNC_CRON },
+        "Failed to enqueue scheduled RSS sync job",
+      );
+    }
   });
 
   logger.info({ schedule: env.RSS_SYNC_CRON }, "RSS scheduler initialized");
@@ -33,46 +58,10 @@ export const stopRssScheduler = async (): Promise<void> => {
 };
 
 export const getNextRunDate = (): Date | null => {
-  if (!schedulerTask) return null;
-  const now = new Date();
-  const parts = env.RSS_SYNC_CRON.split(" ");
-  if (parts.length !== 5) return null;
-
-  const minutePart = parts[1];
-  const hourPart = parts[2];
-  if (!minutePart || !hourPart) return null;
-
-  const next = new Date(now);
-  next.setSeconds(0, 0);
-
-  const minutes = parseCronField(minutePart, 0, 59);
-  const hours = parseCronField(hourPart, 0, 23);
-
-  for (let attempt = 0; attempt < 525600; attempt++) {
-    next.setMinutes(next.getMinutes() + 1);
-    if (minutes.has(next.getMinutes()) && hours.has(next.getHours())) {
-      return next;
-    }
+  if (!schedulerTask) {
+    return null;
   }
 
-  return null;
+  const nextRun = schedulerTask.getNextRun();
+  return nextRun ? new Date(nextRun.getTime()) : null;
 };
-
-function parseCronField(field: string, min: number, max: number): Set<number> {
-  const result = new Set<number>();
-  for (const part of field.split(",")) {
-    if (part === "*") {
-      for (let i = min; i <= max; i++) result.add(i);
-    } else if (part.includes("/")) {
-      const segments = part.split("/");
-      const base = segments[0] ?? "*";
-      const stepStr = segments[1] ?? "1";
-      const step = parseInt(stepStr, 10);
-      const start = base === "*" ? min : parseInt(base, 10);
-      for (let i = start; i <= max; i += step) result.add(i);
-    } else {
-      result.add(parseInt(part, 10));
-    }
-  }
-  return result;
-}
