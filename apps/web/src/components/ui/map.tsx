@@ -99,6 +99,13 @@ function useMap() {
 }
 
 /** Map viewport state */
+type MapBounds = {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
+};
+
 type MapViewport = {
   /** Center coordinates [longitude, latitude] */
   center: [number, number];
@@ -108,6 +115,8 @@ type MapViewport = {
   bearing: number;
   /** Pitch (tilt) in degrees */
   pitch: number;
+  /** Actual visible bounds of the map */
+  viewBounds: MapBounds;
 };
 
 type MapStyleOption = string | MapLibreGL.StyleSpecification;
@@ -159,11 +168,18 @@ function DefaultLoader() {
 
 function getViewport(map: MapLibreGL.Map): MapViewport {
   const center = map.getCenter();
+  const bounds = map.getBounds();
   return {
     center: [center.lng, center.lat],
     zoom: map.getZoom(),
     bearing: map.getBearing(),
     pitch: map.getPitch(),
+    viewBounds: {
+      minLng: bounds.getWest(),
+      minLat: bounds.getSouth(),
+      maxLng: bounds.getEast(),
+      maxLat: bounds.getNorth(),
+    },
   };
 }
 
@@ -1192,7 +1208,7 @@ type MapClusterLayerProps<
     feature: GeoJSON.Feature<GeoJSON.Point, P>,
     coordinates: [number, number],
   ) => void;
-  /** Callback when a cluster is clicked. If not provided, zooms into the cluster */
+  /** Callback when a cluster is clicked. The map will always zoom into the cluster. */
   onClusterClick?: (
     clusterId: number,
     coordinates: [number, number],
@@ -1225,20 +1241,35 @@ function MapClusterLayer<
     pointColor,
   });
 
+  const removeClusterLayers = useCallback((mapInstance: MapLibreGL.Map) => {
+    try {
+      if (mapInstance.getLayer(clusterCountLayerId))
+        mapInstance.removeLayer(clusterCountLayerId);
+      if (mapInstance.getLayer(unclusteredLayerId))
+        mapInstance.removeLayer(unclusteredLayerId);
+      if (mapInstance.getLayer(clusterLayerId))
+        mapInstance.removeLayer(clusterLayerId);
+      if (mapInstance.getSource(sourceId))
+        mapInstance.removeSource(sourceId);
+    } catch {
+      // ignore
+    }
+  }, [clusterCountLayerId, unclusteredLayerId, clusterLayerId, sourceId]);
+
   // Add source and layers on mount
   useEffect(() => {
     if (!isLoaded || !map) return;
 
-    // Add clustered GeoJSON source
+    removeClusterLayers(map);
+
     map.addSource(sourceId, {
       type: "geojson",
-      data,
+      data: { type: "FeatureCollection", features: [] },
       cluster: true,
       clusterMaxZoom,
       clusterRadius,
     });
 
-    // Add cluster circles layer
     map.addLayer({
       id: clusterLayerId,
       type: "circle",
@@ -1269,7 +1300,6 @@ function MapClusterLayer<
       },
     });
 
-    // Add cluster count text layer
     map.addLayer({
       id: clusterCountLayerId,
       type: "symbol",
@@ -1285,34 +1315,28 @@ function MapClusterLayer<
       },
     });
 
-    // Add unclustered point layer
     map.addLayer({
       id: unclusteredLayerId,
       type: "circle",
       source: sourceId,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-color": pointColor,
-        "circle-radius": 5,
+        "circle-color": [
+          "coalesce",
+          ["get", "color"],
+          pointColor,
+        ],
+        "circle-radius": 7,
         "circle-stroke-width": 2,
         "circle-stroke-color": "#fff",
+        "circle-opacity": 0.9,
       },
     });
 
     return () => {
-      try {
-        if (map.getLayer(clusterCountLayerId))
-          map.removeLayer(clusterCountLayerId);
-        if (map.getLayer(unclusteredLayerId))
-          map.removeLayer(unclusteredLayerId);
-        if (map.getLayer(clusterLayerId)) map.removeLayer(clusterLayerId);
-        if (map.getSource(sourceId)) map.removeSource(sourceId);
-      } catch {
-        // ignore
-      }
+      removeClusterLayers(map);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, map, sourceId]);
+  }, [isLoaded, map, sourceId, removeClusterLayers]);
 
   // Update source data when data prop changes (only for non-URL data)
   useEffect(() => {
@@ -1355,9 +1379,12 @@ function MapClusterLayer<
       ]);
     }
 
-    // Update unclustered point layer color
-    if (map.getLayer(unclusteredLayerId) && prev.pointColor !== pointColor) {
-      map.setPaintProperty(unclusteredLayerId, "circle-color", pointColor);
+    if (map.getLayer(unclusteredLayerId)) {
+      map.setPaintProperty(unclusteredLayerId, "circle-color", [
+        "coalesce",
+        ["get", "color"],
+        pointColor,
+      ]);
     }
 
     stylePropsRef.current = { clusterColors, clusterThresholds, pointColor };
@@ -1396,15 +1423,14 @@ function MapClusterLayer<
 
       if (onClusterClick) {
         onClusterClick(clusterId, coordinates, pointCount);
-      } else {
-        // Default behavior: zoom to cluster expansion zoom
-        const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
-        const zoom = await source.getClusterExpansionZoom(clusterId);
-        map.easeTo({
-          center: coordinates,
-          zoom,
-        });
       }
+
+      const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+      const zoom = await source.getClusterExpansionZoom(clusterId);
+      map.easeTo({
+        center: coordinates,
+        zoom,
+      });
     };
 
     // Unclustered point click handler

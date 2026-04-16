@@ -166,14 +166,13 @@ export function MapComponent({
   const handleViewportChange = useCallback(
     (viewport: MapViewport) => {
       currentZoomRef.current = viewport.zoom;
-      const bounds = {
-        minLng: viewport.center[0] - 360 / Math.pow(2, viewport.zoom),
-        minLat: viewport.center[1] - 180 / Math.pow(2, viewport.zoom),
-        maxLng: viewport.center[0] + 360 / Math.pow(2, viewport.zoom),
-        maxLat: viewport.center[1] + 180 / Math.pow(2, viewport.zoom),
+      onViewportChange({
+        minLng: viewport.viewBounds.minLng,
+        minLat: viewport.viewBounds.minLat,
+        maxLng: viewport.viewBounds.maxLng,
+        maxLat: viewport.viewBounds.maxLat,
         zoom: viewport.zoom,
-      };
-      onViewportChange(bounds);
+      });
     },
     [onViewportChange],
   );

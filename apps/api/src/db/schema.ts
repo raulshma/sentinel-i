@@ -43,6 +43,7 @@ export const newsItemLocations = pgTable(
     city: text("city"),
     state: text("state"),
     isPrimary: boolean("is_primary").notNull().default(false),
+    geom: text("geom"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
