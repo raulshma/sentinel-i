@@ -4,10 +4,14 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface StageMetric {
   stage: string;
+  totalEvents: number;
   startCount: number;
   successCount: number;
   warnCount: number;
   errorCount: number;
+  successRate: number;
+  warnRate: number;
+  errorRate: number;
   avgDurationMs: number | null;
   p50DurationMs: number | null;
   p95DurationMs: number | null;
@@ -16,9 +20,11 @@ export interface StageMetric {
 export interface ActivityBucket {
   bucketStart: string;
   totalEvents: number;
+  startEvents: number;
   successEvents: number;
   warnEvents: number;
   errorEvents: number;
+  traceCount: number;
   avgDurationMs: number | null;
 }
 
@@ -27,24 +33,94 @@ export interface FailureTaxonomyItem {
   count: number;
 }
 
+export interface SummaryMetric {
+  totalEvents: number;
+  startEvents: number;
+  successEvents: number;
+  warnEvents: number;
+  errorEvents: number;
+  distinctTraces: number;
+  distinctRuns: number;
+  distinctJobs: number;
+  distinctArticles: number;
+  distinctSources: number;
+  avgDurationMs: number | null;
+  p95DurationMs: number | null;
+  eventsPerMinute: number;
+  eventsPerHour: number;
+  successRate: number;
+  warnRate: number;
+  errorRate: number;
+}
+
+export interface SourceFailureHotspot {
+  source: string;
+  totalEvents: number;
+  failureEvents: number;
+  failureRate: number;
+}
+
+export interface AiProviderMetric {
+  provider: string;
+  count: number;
+}
+
+export interface AiToolMetric {
+  toolName: string;
+  callCount: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+}
+
+export interface QueueAttemptHistogramBucket {
+  attempt: number;
+  count: number;
+}
+
 export interface ProcessingAnalytics {
   windowHours: number;
+  windowStart: string;
+  windowEnd: string;
+  bucketUnit: "hour" | "day";
+  summary: SummaryMetric;
   stageMetrics: StageMetric[];
   activitySeries: ActivityBucket[];
   failureTaxonomy: FailureTaxonomyItem[];
+  sourceFailures: SourceFailureHotspot[];
   aiUsage: {
     inputTokens: number;
     outputTokens: number;
     reasoningTokens: number;
     totalTokens: number;
     estimatedCostUsd: number;
+    avgLatencyMs: number | null;
+    p95LatencyMs: number | null;
+    avgThroughputTokensPerSecond: number | null;
+    providers: AiProviderMetric[];
+    toolCalls: {
+      total: number;
+      success: number;
+      warn: number;
+      error: number;
+      successRate: number;
+    };
+    toolBreakdown: AiToolMetric[];
   };
   queueMetrics: {
     totalJobs: number;
+    retriedJobs: number;
     retryEvents: number;
     maxAttempt: number;
     failedJobs: number;
     successfulJobs: number;
+    inFlightJobs: number;
+    retryRate: number;
+    successRate: number;
+    failureRate: number;
+    avgJobDurationMs: number | null;
+    p95JobDurationMs: number | null;
+    attemptHistogram: QueueAttemptHistogramBucket[];
   };
 }
 

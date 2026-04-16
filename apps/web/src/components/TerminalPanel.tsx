@@ -130,6 +130,23 @@ function formatCostUsd(cost: number): string {
   return `$${cost.toFixed(4)}`;
 }
 
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0.0%";
+  return `${value.toFixed(1)}%`;
+}
+
+function formatCompactNumber(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value));
+}
+
 function formatTimelineGroupTitle(group: ProcessingTimelineGroup): string {
   if (group.headline) {
     return truncateText(group.headline, 44);
@@ -341,6 +358,31 @@ export function TerminalPanel({
     );
   }, [selectedTimelineGroup, timelineData]);
 
+  const rankedStageMetrics = useMemo(() => {
+    if (!analytics) {
+      return [];
+    }
+
+    return [...analytics.stageMetrics].sort(
+      (left, right) => right.totalEvents - left.totalEvents,
+    );
+  }, [analytics]);
+
+  const maxStageEvents = useMemo(
+    () => Math.max(...rankedStageMetrics.map((row) => row.totalEvents), 1),
+    [rankedStageMetrics],
+  );
+
+  const maxQueueAttemptCount = useMemo(
+    () =>
+      Math.max(
+        ...(analytics?.queueMetrics.attemptHistogram.map((row) => row.count) ??
+          []),
+        1,
+      ),
+    [analytics],
+  );
+
   useEffect(() => {
     if (!isMaximized) return;
     const update = () => setViewportHeight(window.innerHeight);
@@ -519,7 +561,10 @@ export function TerminalPanel({
             </div>
           )}
           {logs.map((log, idx) => (
-            <LogEntry key={log.id ?? `${log.streamId}-${log.createdAt}-${idx}`} log={log} />
+            <LogEntry
+              key={log.id ?? `${log.streamId}-${log.createdAt}-${idx}`}
+              log={log}
+            />
           ))}
         </div>
       ) : null}
@@ -670,6 +715,11 @@ export function TerminalPanel({
               <option value={72}>72h</option>
               <option value={168}>7d</option>
             </select>
+            <span className="ml-auto text-[9px] text-slate-500">
+              {analytics
+                ? `${analytics.bucketUnit} buckets · updated ${formatTime(analytics.windowEnd)}`
+                : "Load analytics to view details"}
+            </span>
           </div>
 
           <div
@@ -693,44 +743,79 @@ export function TerminalPanel({
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2 text-[10px]">
                   <div className="rounded-md border border-white/10 bg-black/30 p-2">
-                    <p className="text-slate-500">Queue jobs</p>
+                    <p className="text-slate-500">Events</p>
                     <p className="text-sm text-white">
-                      {analytics.queueMetrics.totalJobs}
+                      {formatCompactNumber(analytics.summary.totalEvents)}
                     </p>
                     <p className="text-slate-500">
-                      retries: {analytics.queueMetrics.retryEvents}
+                      start {formatCompactNumber(analytics.summary.startEvents)}{" "}
+                      · traces{" "}
+                      {formatCompactNumber(analytics.summary.distinctTraces)}
                     </p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-black/30 p-2">
-                    <p className="text-slate-500">Queue success/fail</p>
+                    <p className="text-slate-500">Event health</p>
                     <p className="text-sm text-white">
-                      {analytics.queueMetrics.successfulJobs} /{" "}
-                      {analytics.queueMetrics.failedJobs}
+                      {formatPercent(analytics.summary.successRate)} success
                     </p>
                     <p className="text-slate-500">
-                      max attempt: {analytics.queueMetrics.maxAttempt}
+                      warn {formatPercent(analytics.summary.warnRate)} · err{" "}
+                      {formatPercent(analytics.summary.errorRate)}
                     </p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-black/30 p-2">
-                    <p className="text-slate-500">AI total tokens</p>
+                    <p className="text-slate-500">Throughput</p>
                     <p className="text-sm text-white">
-                      {analytics.aiUsage.totalTokens.toLocaleString("en-US")}
+                      {analytics.summary.eventsPerHour.toLocaleString("en-US", {
+                        maximumFractionDigits: 1,
+                      })}
+                      /h
                     </p>
                     <p className="text-slate-500">
-                      in/out:{" "}
-                      {analytics.aiUsage.inputTokens.toLocaleString("en-US")} /{" "}
-                      {analytics.aiUsage.outputTokens.toLocaleString("en-US")}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-white/10 bg-black/30 p-2">
-                    <p className="text-slate-500">AI est. cost</p>
-                    <p className="text-sm text-white">
-                      {formatCostUsd(analytics.aiUsage.estimatedCostUsd)}
-                    </p>
-                    <p className="text-slate-500">
-                      reasoning:{" "}
-                      {analytics.aiUsage.reasoningTokens.toLocaleString(
+                      {analytics.summary.eventsPerMinute.toLocaleString(
                         "en-US",
+                        {
+                          maximumFractionDigits: 2,
+                        },
+                      )}
+                      /min · avg{" "}
+                      {formatDuration(
+                        analytics.summary.avgDurationMs ?? undefined,
+                      )}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                    <p className="text-slate-500">Coverage</p>
+                    <p className="text-sm text-white">
+                      {formatCompactNumber(analytics.summary.distinctSources)}{" "}
+                      sources
+                    </p>
+                    <p className="text-slate-500">
+                      runs {formatCompactNumber(analytics.summary.distinctRuns)}{" "}
+                      · jobs{" "}
+                      {formatCompactNumber(analytics.summary.distinctJobs)}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                    <p className="text-slate-500">Queue</p>
+                    <p className="text-sm text-white">
+                      {analytics.queueMetrics.totalJobs} jobs
+                    </p>
+                    <p className="text-slate-500">
+                      retried {analytics.queueMetrics.retriedJobs} (
+                      {formatPercent(analytics.queueMetrics.retryRate)})
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                    <p className="text-slate-500">AI usage</p>
+                    <p className="text-sm text-white">
+                      {analytics.aiUsage.totalTokens.toLocaleString("en-US")}{" "}
+                      tok
+                    </p>
+                    <p className="text-slate-500">
+                      {formatCostUsd(analytics.aiUsage.estimatedCostUsd)} · p95{" "}
+                      {formatDuration(
+                        analytics.aiUsage.p95LatencyMs ?? undefined,
                       )}
                     </p>
                   </div>
@@ -760,45 +845,107 @@ export function TerminalPanel({
                       return (
                         <>
                           <div className="flex h-24 items-end gap-1">
-                            {analytics.activitySeries.map((bucket) => {
+                            {analytics.activitySeries.map((bucket, idx) => {
                               const totalHeight = Math.max(
                                 4,
                                 Math.round(
                                   (bucket.totalEvents / maxEvents) * 100,
                                 ),
                               );
-                              const errorHeight =
+                              const successRatio =
                                 bucket.totalEvents > 0
-                                  ? Math.max(
-                                      1,
-                                      Math.round(
-                                        (bucket.errorEvents /
-                                          bucket.totalEvents) *
-                                          totalHeight,
-                                      ),
-                                    )
+                                  ? (bucket.successEvents /
+                                      bucket.totalEvents) *
+                                    100
+                                  : 0;
+                              const warnRatio =
+                                bucket.totalEvents > 0
+                                  ? (bucket.warnEvents / bucket.totalEvents) *
+                                    100
+                                  : 0;
+                              const errorRatio =
+                                bucket.totalEvents > 0
+                                  ? (bucket.errorEvents / bucket.totalEvents) *
+                                    100
+                                  : 0;
+                              const otherEvents = Math.max(
+                                bucket.totalEvents -
+                                  bucket.successEvents -
+                                  bucket.warnEvents -
+                                  bucket.errorEvents,
+                                0,
+                              );
+                              const otherRatio =
+                                bucket.totalEvents > 0
+                                  ? (otherEvents / bucket.totalEvents) * 100
                                   : 0;
 
                               return (
                                 <div
                                   key={bucket.bucketStart}
                                   className="group relative flex-1 animate-fade-in"
-                                  style={{ animationDelay: `${analytics.activitySeries.indexOf(bucket) * 15}ms` }}
-                                  title={`${formatActivityBucketLabel(bucket.bucketStart, analytics.windowHours)} · total ${bucket.totalEvents} · err ${bucket.errorEvents} · avg ${formatDuration(bucket.avgDurationMs ?? undefined)}`}
+                                  style={{
+                                    animationDelay: `${idx * 15}ms`,
+                                  }}
+                                  title={`${formatActivityBucketLabel(bucket.bucketStart, analytics.windowHours)} · total ${bucket.totalEvents} · ok ${bucket.successEvents} · warn ${bucket.warnEvents} · err ${bucket.errorEvents} · traces ${bucket.traceCount} · avg ${formatDuration(bucket.avgDurationMs ?? undefined)}`}
                                 >
                                   <div
-                                    className="absolute bottom-0 left-0 right-0 rounded-sm bg-sky-400/40 transition-colors group-hover:bg-sky-400/60"
+                                    className="absolute bottom-0 left-0 right-0 overflow-hidden rounded-sm border border-white/5 bg-slate-600/20"
                                     style={{ height: `${totalHeight}%` }}
-                                  />
-                                  {errorHeight > 0 ? (
-                                    <div
-                                      className="absolute bottom-0 left-0 right-0 rounded-b-sm bg-red-500/70"
-                                      style={{ height: `${errorHeight}%` }}
-                                    />
-                                  ) : null}
+                                  >
+                                    <div className="flex h-full flex-col-reverse">
+                                      {bucket.errorEvents > 0 ? (
+                                        <div
+                                          className="bg-red-500/75"
+                                          style={{
+                                            height: `${clampPercent(errorRatio)}%`,
+                                          }}
+                                        />
+                                      ) : null}
+                                      {bucket.warnEvents > 0 ? (
+                                        <div
+                                          className="bg-amber-400/75"
+                                          style={{
+                                            height: `${clampPercent(warnRatio)}%`,
+                                          }}
+                                        />
+                                      ) : null}
+                                      {bucket.successEvents > 0 ? (
+                                        <div
+                                          className="bg-emerald-400/75"
+                                          style={{
+                                            height: `${clampPercent(successRatio)}%`,
+                                          }}
+                                        />
+                                      ) : null}
+                                      {otherEvents > 0 ? (
+                                        <div
+                                          className="bg-sky-400/45"
+                                          style={{
+                                            height: `${clampPercent(otherRatio)}%`,
+                                          }}
+                                        />
+                                      ) : null}
+                                    </div>
+                                  </div>
                                 </div>
                               );
                             })}
+                          </div>
+
+                          <div className="mt-1 flex items-center gap-3 text-[9px] text-slate-500">
+                            <span className="inline-flex items-center gap-1">
+                              <span className="h-2 w-2 rounded-full bg-emerald-400/80" />
+                              success
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <span className="h-2 w-2 rounded-full bg-amber-400/80" />
+                              warn
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <span className="h-2 w-2 rounded-full bg-red-500/80" />
+                              error
+                            </span>
                           </div>
 
                           <div className="mt-1 flex items-center justify-between text-[9px] text-slate-500">
@@ -830,34 +977,307 @@ export function TerminalPanel({
                     Stage Metrics
                   </p>
                   <div className="space-y-1 text-[10px]">
-                    {analytics.stageMetrics.length === 0 ? (
+                    {rankedStageMetrics.length === 0 ? (
                       <p className="text-slate-500">
                         No stage metrics for this window.
                       </p>
                     ) : (
-                      analytics.stageMetrics.map((row) => (
-                        <div
-                          key={row.stage}
-                          className="grid grid-cols-[72px_1fr_1fr_1fr] items-center gap-2 border-b border-white/5 py-1"
-                        >
-                          <span className="font-mono text-slate-400">
-                            {STAGE_LABELS[row.stage as ProcessingStage] ??
-                              row.stage}
-                          </span>
-                          <span className="text-slate-300">
-                            ok {row.successCount} · err {row.errorCount} · warn{" "}
-                            {row.warnCount}
-                          </span>
-                          <span className="text-slate-400">
-                            p50 {formatDuration(row.p50DurationMs ?? undefined)}
-                          </span>
-                          <span className="text-slate-400">
-                            p95 {formatDuration(row.p95DurationMs ?? undefined)}
-                          </span>
-                        </div>
-                      ))
+                      rankedStageMetrics.map((row) => {
+                        const stageShare =
+                          analytics.summary.totalEvents > 0
+                            ? (row.totalEvents /
+                                analytics.summary.totalEvents) *
+                              100
+                            : 0;
+                        const volumeWidth = Math.max(
+                          3,
+                          Math.round((row.totalEvents / maxStageEvents) * 100),
+                        );
+
+                        return (
+                          <div
+                            key={row.stage}
+                            className="border-b border-white/5 py-1"
+                          >
+                            <div className="grid grid-cols-[72px_1fr_72px] items-center gap-2">
+                              <span className="font-mono text-slate-400">
+                                {STAGE_LABELS[row.stage as ProcessingStage] ??
+                                  row.stage}
+                              </span>
+                              <span className="text-slate-300">
+                                {formatCompactNumber(row.totalEvents)} events ·
+                                ok {formatPercent(row.successRate)} · err{" "}
+                                {formatPercent(row.errorRate)}
+                              </span>
+                              <span className="text-right text-slate-500">
+                                {formatPercent(stageShare)}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex items-center gap-2">
+                              <div className="h-1.5 flex-1 rounded-full bg-white/10">
+                                <div
+                                  className="h-full rounded-full bg-sky-400/70"
+                                  style={{
+                                    width: `${clampPercent(volumeWidth)}%`,
+                                  }}
+                                />
+                              </div>
+                              <span className="text-[9px] text-slate-500">
+                                p95{" "}
+                                {formatDuration(row.p95DurationMs ?? undefined)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
+                </div>
+
+                <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                  <p className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">
+                    AI Deep Dive
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Token split</p>
+                      <p className="text-slate-200">
+                        in{" "}
+                        {analytics.aiUsage.inputTokens.toLocaleString("en-US")}
+                        {" · "}
+                        out{" "}
+                        {analytics.aiUsage.outputTokens.toLocaleString("en-US")}
+                      </p>
+                      <p className="text-slate-500">
+                        reasoning{" "}
+                        {analytics.aiUsage.reasoningTokens.toLocaleString(
+                          "en-US",
+                        )}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Latency</p>
+                      <p className="text-slate-200">
+                        avg{" "}
+                        {formatDuration(
+                          analytics.aiUsage.avgLatencyMs ?? undefined,
+                        )}
+                      </p>
+                      <p className="text-slate-500">
+                        p95{" "}
+                        {formatDuration(
+                          analytics.aiUsage.p95LatencyMs ?? undefined,
+                        )}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Cost / throughput</p>
+                      <p className="text-slate-200">
+                        {formatCostUsd(analytics.aiUsage.estimatedCostUsd)}
+                      </p>
+                      <p className="text-slate-500">
+                        {analytics.aiUsage.avgThroughputTokensPerSecond == null
+                          ? "tok/s n/a"
+                          : `${analytics.aiUsage.avgThroughputTokensPerSecond.toLocaleString("en-US")} tok/s`}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Tool calls</p>
+                      <p className="text-slate-200">
+                        {analytics.aiUsage.toolCalls.total} total · ok{" "}
+                        {formatPercent(analytics.aiUsage.toolCalls.successRate)}
+                      </p>
+                      <p className="text-slate-500">
+                        warn {analytics.aiUsage.toolCalls.warn} · err{" "}
+                        {analytics.aiUsage.toolCalls.error}
+                      </p>
+                    </div>
+                  </div>
+
+                  {analytics.aiUsage.providers.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1 text-[9px]">
+                      {analytics.aiUsage.providers.map((provider) => (
+                        <span
+                          key={provider.provider}
+                          className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-slate-300"
+                        >
+                          {provider.provider} · {provider.count}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      Provider metadata not available in this window.
+                    </p>
+                  )}
+
+                  {analytics.aiUsage.toolBreakdown.length > 0 ? (
+                    <div className="mt-2 space-y-1 text-[10px]">
+                      {analytics.aiUsage.toolBreakdown.map((toolRow) => (
+                        <div
+                          key={toolRow.toolName}
+                          className="border-b border-white/5 py-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-slate-300">
+                              {toolRow.toolName}
+                            </span>
+                            <span className="text-slate-500">
+                              {toolRow.callCount} calls ·{" "}
+                              {formatPercent(toolRow.successRate)}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-1.5 rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-emerald-400/70"
+                              style={{
+                                width: `${clampPercent(Math.max(toolRow.successRate, 2))}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                  <p className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">
+                    Queue Health
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">
+                        Success / fail / inflight
+                      </p>
+                      <p className="text-slate-200">
+                        {analytics.queueMetrics.successfulJobs} /{" "}
+                        {analytics.queueMetrics.failedJobs} /{" "}
+                        {analytics.queueMetrics.inFlightJobs}
+                      </p>
+                      <p className="text-slate-500">
+                        success{" "}
+                        {formatPercent(analytics.queueMetrics.successRate)} ·
+                        fail {formatPercent(analytics.queueMetrics.failureRate)}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Retries</p>
+                      <p className="text-slate-200">
+                        {analytics.queueMetrics.retryEvents} retry attempts
+                      </p>
+                      <p className="text-slate-500">
+                        {analytics.queueMetrics.retriedJobs} jobs retried · max
+                        attempt {analytics.queueMetrics.maxAttempt}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Runtime</p>
+                      <p className="text-slate-200">
+                        avg{" "}
+                        {formatDuration(
+                          analytics.queueMetrics.avgJobDurationMs ?? undefined,
+                        )}
+                      </p>
+                      <p className="text-slate-500">
+                        p95{" "}
+                        {formatDuration(
+                          analytics.queueMetrics.p95JobDurationMs ?? undefined,
+                        )}
+                      </p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-slate-500">Window bounds</p>
+                      <p className="text-slate-200">
+                        {formatActivityBucketLabel(
+                          analytics.windowStart,
+                          analytics.windowHours,
+                        )}
+                        {" → "}
+                        {formatActivityBucketLabel(
+                          analytics.windowEnd,
+                          analytics.windowHours,
+                        )}
+                      </p>
+                      <p className="text-slate-500">
+                        {analytics.bucketUnit} aggregation
+                      </p>
+                    </div>
+                  </div>
+
+                  {analytics.queueMetrics.attemptHistogram.length > 0 ? (
+                    <div className="mt-2">
+                      <p className="mb-1 text-[9px] uppercase tracking-wide text-slate-500">
+                        Attempt distribution
+                      </p>
+                      <div className="flex h-20 items-end gap-1">
+                        {analytics.queueMetrics.attemptHistogram.map((row) => {
+                          const height = Math.max(
+                            6,
+                            Math.round(
+                              (row.count / maxQueueAttemptCount) * 100,
+                            ),
+                          );
+
+                          return (
+                            <div
+                              key={row.attempt}
+                              className="group relative flex-1"
+                              title={`attempt ${row.attempt} · ${row.count} jobs`}
+                            >
+                              <div
+                                className="absolute bottom-0 left-0 right-0 rounded-sm bg-sky-400/55 transition-colors group-hover:bg-sky-400/75"
+                                style={{ height: `${height}%` }}
+                              />
+                              <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[9px] text-slate-500">
+                                {row.attempt}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-md border border-white/10 bg-black/30 p-2">
+                  <p className="mb-2 text-[10px] uppercase tracking-wide text-slate-500">
+                    Source Failure Hotspots
+                  </p>
+                  {analytics.sourceFailures.length === 0 ? (
+                    <p className="text-[10px] text-slate-500">
+                      No failure hotspots detected in this window.
+                    </p>
+                  ) : (
+                    <div className="space-y-1 text-[10px]">
+                      {analytics.sourceFailures.map((row) => (
+                        <div
+                          key={row.source}
+                          className="border-b border-white/5 py-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-slate-300">
+                              {row.source}
+                            </span>
+                            <span className="text-slate-500">
+                              {row.failureEvents}/{row.totalEvents} ·{" "}
+                              {formatPercent(row.failureRate)}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-1.5 rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-red-500/70"
+                              style={{
+                                width: `${clampPercent(Math.max(row.failureRate, 2))}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-md border border-white/10 bg-black/30 p-2">

@@ -3,8 +3,6 @@ import { CreditCard } from "lucide-react";
 
 import { FilterPanel } from "./components/FilterPanel";
 import { ArticleToastStack } from "./components/ArticleToastStack";
-import { TerminalPanel } from "./components/TerminalPanel";
-import { UsageFlyout } from "./components/UsageFlyout";
 import { useDeepLink } from "./hooks/useDeepLink";
 import { type ArticleAddedEvent, useMapData } from "./hooks/useMapData";
 import { useProcessingLogs } from "./hooks/useProcessingLogs";
@@ -29,6 +27,16 @@ const NewsCarousel = lazy(() =>
 const NationalPanel = lazy(() =>
   import("./components/NationalPanel").then((mod) => ({
     default: mod.NationalPanel,
+  })),
+);
+const TerminalPanel = lazy(() =>
+  import("./components/TerminalPanel").then((mod) => ({
+    default: mod.TerminalPanel,
+  })),
+);
+const UsageFlyout = lazy(() =>
+  import("./components/UsageFlyout").then((mod) => ({
+    default: mod.UsageFlyout,
   })),
 );
 
@@ -338,33 +346,39 @@ function App() {
                 <span className="hidden sm:inline">Usage</span>
               </button>
             )}
-            <TerminalPanel
-              logs={logs}
-              isEnabled={isDevToolsEnabled}
-              isConnected={isTerminalConnected}
-              isOpen={showTerminal}
-              onToggle={() => setShowTerminal((prev) => !prev)}
-              nextSyncAt={nextSyncAt}
-              isSyncing={isSyncing}
-              onTriggerSync={triggerSync}
-            />
+            {isDevToolsEnabled ? (
+              <Suspense fallback={null}>
+                <TerminalPanel
+                  logs={logs}
+                  isEnabled={isDevToolsEnabled}
+                  isConnected={isTerminalConnected}
+                  isOpen={showTerminal}
+                  onToggle={() => setShowTerminal((prev) => !prev)}
+                  nextSyncAt={nextSyncAt}
+                  isSyncing={isSyncing}
+                  onTriggerSync={triggerSync}
+                />
+              </Suspense>
+            ) : null}
           </li>
         </ul>
       </footer>
 
-      {isDevToolsEnabled && (
-        <UsageFlyout
-          isOpen={showUsage}
-          onClose={() => {
-            setShowUsage(false);
-            usage.stopPolling();
-          }}
-          data={usage.data}
-          isLoading={usage.isLoading}
-          error={usage.error}
-          onRefresh={usage.fetchUsage}
-        />
-      )}
+      {isDevToolsEnabled && showUsage ? (
+        <Suspense fallback={null}>
+          <UsageFlyout
+            isOpen={showUsage}
+            onClose={() => {
+              setShowUsage(false);
+              usage.stopPolling();
+            }}
+            data={usage.data}
+            isLoading={usage.isLoading}
+            error={usage.error}
+            onRefresh={usage.fetchUsage}
+          />
+        </Suspense>
+      ) : null}
     </main>
   );
 }
