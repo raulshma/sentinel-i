@@ -549,6 +549,80 @@ export class NewsRepository {
       return [];
     }
   }
+
+  async findForFeed(
+    hours = 24,
+    limit = 100,
+    categories?: NewsCategory[],
+  ): Promise<
+    Array<{
+      id: string;
+      headline: string;
+      summary: string;
+      sourceUrl: string;
+      category: string;
+      isNational: boolean;
+      publishedAt: Date;
+      locations: Array<{ city: string | null; state: string | null }>;
+    }>
+  > {
+    const publishedSince = sql`NOW() - make_interval(hours => ${hours}::int)`;
+
+    const categoryFilterSql =
+      categories && categories.length > 0
+        ? sql`AND n.category IN (${sql.join(
+            categories.map((c) => sql`${c}`),
+            sql`, `,
+          )})`
+        : sql``;
+
+    try {
+      const result = await getDb().execute(sql`
+        SELECT
+          n.id,
+          n.headline,
+          n.summary,
+          n.source_url,
+          n.category,
+          n.is_national,
+          n.published_at,
+          (
+            SELECT json_build_array(
+              json_agg(json_build_object('city', l2.city, 'state', l2.state))
+            )
+            FROM ${newsItemLocations} l2
+            WHERE l2.news_item_id = n.id
+          ) AS locations_json
+        FROM ${newsItems} n
+        WHERE n.published_at >= ${publishedSince}
+          ${categoryFilterSql}
+        ORDER BY n.published_at DESC
+        LIMIT ${limit}::int
+      `);
+
+      return result.rows.map((row) => ({
+        id: row.id as string,
+        headline: row.headline as string,
+        summary: row.summary as string,
+        sourceUrl: row.source_url as string,
+        category: normalizeCategory(
+          row.category as string,
+          row.is_national as boolean,
+        ),
+        isNational: row.is_national as boolean,
+        publishedAt: new Date(row.published_at as string),
+        locations: (
+          (row.locations_json as Array<Array<{ city: string | null; state: string | null }> | null>)?.[0] ?? []
+        ).filter(
+          (loc): loc is { city: string | null; state: string | null } =>
+            loc !== null,
+        ),
+      }));
+    } catch (error) {
+      logger.warn({ error }, "RSS feed query failed");
+      return [];
+    }
+  }
 }
 
 export const newsRepository = new NewsRepository();

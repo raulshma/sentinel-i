@@ -9,6 +9,7 @@ import {
   type ViewportQuery,
 } from "../types/news.js";
 import type { NewsService } from "../services/news.service.js";
+import type { RssFeedService } from "../services/rssFeed.service.js";
 
 const viewportQuerySchema = z
   .object({
@@ -66,8 +67,17 @@ const clusterArticlesSchema = z.object({
   state: z.string().trim().min(1).max(120).optional(),
 });
 
+const feedQuerySchema = z.object({
+  hours: z.coerce.number().int().min(1).max(72).default(24),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  categories: z.string().optional(),
+});
+
 export class NewsController {
-  constructor(private readonly service: NewsService) {}
+  constructor(
+    private readonly service: NewsService,
+    private readonly rssFeedService: RssFeedService,
+  ) {}
 
   getViewportNews = async (
     req: Request,
@@ -181,6 +191,42 @@ export class NewsController {
       res.json({ data: articles });
     } catch (error) {
       logger.error({ error }, "Failed to fetch cluster articles");
+      next(error);
+    }
+  };
+
+  getFeed = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    const parsed = feedQuerySchema.safeParse(req.query);
+
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid feed query",
+        details: parsed.error.flatten(),
+      });
+      return;
+    }
+
+    const categories = parseCategories(parsed.data.categories);
+
+    try {
+      const protocol = req.protocol;
+      const host = req.get("host") ?? "localhost:8080";
+      const baseUrl = `${protocol}://${host}`;
+
+      const xml = await this.rssFeedService.generateFeed(
+        baseUrl,
+        parsed.data.hours,
+        parsed.data.limit,
+        categories,
+      );
+
+      res.type("application/rss+xml").send(xml);
+    } catch (error) {
+      logger.error({ error }, "Failed to generate RSS feed");
       next(error);
     }
   };

@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import { CreditCard } from "lucide-react";
+import { CreditCard, Rss } from "lucide-react";
 
 import { FilterPanel } from "./components/FilterPanel";
 import { ArticleToastStack } from "./components/ArticleToastStack";
@@ -203,6 +203,16 @@ function App() {
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <a
+            href="/api/v1/news/feed"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Subscribe to RSS feed"
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-white/10 hover:text-orange-400"
+          >
+            <Rss size={13} aria-hidden="true" />
+            <span className="hidden sm:inline">RSS</span>
+          </a>
           <div
             className="flex items-center gap-1.5"
             role="status"
