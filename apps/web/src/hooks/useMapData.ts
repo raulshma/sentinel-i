@@ -10,7 +10,6 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const DEBOUNCE_MS = 350;
-const MIN_UNCLUSTERED_BACKEND_ZOOM = 10;
 
 type SocketArticle = NationalItem & {
   isNational: boolean;
@@ -61,12 +60,18 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   const hoursRef = useRef(hours);
   const categoriesRef = useRef(categories);
   const lastBoundsRef = useRef<ViewportBounds | null>(null);
+  const requestSeqRef = useRef(0);
+  const activeRequestRef = useRef(0);
 
   hoursRef.current = hours;
   categoriesRef.current = categories;
 
   const fetchViewport = useCallback(async (bounds: ViewportBounds) => {
     lastBoundsRef.current = bounds;
+
+    const requestId = requestSeqRef.current + 1;
+    requestSeqRef.current = requestId;
+    activeRequestRef.current = requestId;
 
     if (abortRef.current) {
       abortRef.current.abort();
@@ -80,10 +85,7 @@ export const useMapData = (hours = 24, categories?: string[]) => {
       minLat: bounds.minLat.toString(),
       maxLng: bounds.maxLng.toString(),
       maxLat: bounds.maxLat.toString(),
-      zoom: Math.max(
-        MIN_UNCLUSTERED_BACKEND_ZOOM,
-        Math.round(bounds.zoom),
-      ).toString(),
+      zoom: Math.round(bounds.zoom).toString(),
       hours: hoursRef.current.toString(),
     });
 
@@ -106,7 +108,10 @@ export const useMapData = (hours = 24, categories?: string[]) => {
 
       const data = (await response.json()) as ClusteredViewportResponse;
 
-      if (!controller.signal.aborted) {
+      if (
+        !controller.signal.aborted &&
+        activeRequestRef.current === requestId
+      ) {
         setFeatures(deduplicateFeatures(data.features));
         setNationalItems(deduplicateNationalItems(data.nationalItems));
       }
@@ -114,10 +119,16 @@ export const useMapData = (hours = 24, categories?: string[]) => {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to fetch map data");
+      if (activeRequestRef.current === requestId) {
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch map data",
+        );
+      }
     } finally {
       if (abortRef.current === controller) {
-        setIsLoading(false);
+        if (activeRequestRef.current === requestId) {
+          setIsLoading(false);
+        }
         abortRef.current = null;
       }
     }

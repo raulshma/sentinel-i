@@ -36,6 +36,14 @@ const TILE_STYLES: TileStyle[] = [
     id: "liberty",
     label: "Liberty",
   },
+  {
+    id: "fiord",
+    label: "Fiord",
+  },
+  {
+    id: "liberty-3d",
+    label: "3D",
+  },
 ];
 
 const TILE_URLS: Record<string, { light: string; dark: string }> = {
@@ -54,6 +62,14 @@ const TILE_URLS: Record<string, { light: string; dark: string }> = {
   liberty: {
     light: "https://tiles.openfreemap.org/styles/liberty",
     dark: "https://tiles.openfreemap.org/styles/liberty",
+  },
+  "liberty-3d": {
+    light: "https://tiles.openfreemap.org/styles/liberty",
+    dark: "https://tiles.openfreemap.org/styles/liberty",
+  },
+  fiord: {
+    light: "https://tiles.openfreemap.org/styles/fiord",
+    dark: "https://tiles.openfreemap.org/styles/fiord",
   },
 };
 
@@ -382,6 +398,7 @@ export function MapComponent({
         maxZoom={16}
         theme="dark"
         styles={tileStyles}
+        dragRotate={tileStyle === "liberty-3d"}
         onViewportChange={handleViewportChange}
       >
         {articleGroups.map((group) => {
@@ -423,6 +440,8 @@ export function MapComponent({
           features={highlightFeatures}
           highlightedArticleId={highlightedArticleId}
         />
+
+        <PitchHandler tileStyle={tileStyle} />
 
         <MapControls position="bottom-right" showZoom showCompass={false} />
 
@@ -567,6 +586,25 @@ function HighlightLayer({
 
     source.setData({ type: "FeatureCollection", features: geojsonFeatures });
   }, [isLoaded, map, features, highlightedArticleId]);
+
+  return null;
+}
+
+function PitchHandler({ tileStyle }: { tileStyle: string }) {
+  const { map, isLoaded } = useMap();
+  const prevTileStyleRef = useRef(tileStyle);
+
+  useEffect(() => {
+    if (!isLoaded || !map) return;
+    if (prevTileStyleRef.current === tileStyle) return;
+    prevTileStyleRef.current = tileStyle;
+
+    if (tileStyle === "liberty-3d") {
+      map.easeTo({ pitch: 60, bearing: 30, duration: 800 });
+    } else if (map.getPitch() !== 0 || map.getBearing() !== 0) {
+      map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+    }
+  }, [isLoaded, map, tileStyle]);
 
   return null;
 }
