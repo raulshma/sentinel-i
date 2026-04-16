@@ -1,4 +1,4 @@
-import { eq, sql, and, desc, gte } from "drizzle-orm";
+import { eq, sql, and, desc, gte, inArray } from "drizzle-orm";
 
 import { createHash } from "node:crypto";
 
@@ -287,24 +287,45 @@ export class NewsRepository {
     const { zoom, ...viewport } = query;
     const gridSize = this.getGridSize(zoom);
     const shouldCluster = zoom < 10;
+    const categoryFilterSql =
+      viewport.categories && viewport.categories.length > 0
+        ? sql`AND n.category IN (${sql.join(
+            viewport.categories.map((category) => sql`${category}`),
+            sql`, `,
+          )})`
+        : sql``;
 
     const features: MapFeature[] = [];
 
     try {
       if (shouldCluster) {
         const result = await getDb().execute(sql`
+          WITH article_points AS (
+            SELECT
+              n.id AS news_item_id,
+              n.category,
+              l_primary.geom
+            FROM ${newsItems} n
+            JOIN LATERAL (
+              SELECT l.geom
+              FROM ${newsItemLocations} l
+              WHERE l.news_item_id = n.id
+                AND l.geom IS NOT NULL
+                AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
+              ORDER BY l.is_primary DESC, l.id
+              LIMIT 1
+            ) l_primary ON TRUE
+            WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
+              AND n.is_national = FALSE
+              ${categoryFilterSql}
+          )
           SELECT
-            ST_Y(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS latitude,
-            ST_X(ST_Centroid(ST_Collect(l.geom::geometry)))::double precision AS longitude,
-            COUNT(DISTINCT n.id)::int AS count,
-            json_agg(DISTINCT n.category) AS categories_json
-          FROM ${newsItemLocations} l
-          JOIN ${newsItems} n ON n.id = l.news_item_id
-          WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
-            AND n.is_national = FALSE
-            AND l.geom IS NOT NULL
-            AND l.geom && ST_MakeEnvelope(${viewport.minLng}, ${viewport.minLat}, ${viewport.maxLng}, ${viewport.maxLat}, 4326)
-          GROUP BY ST_SnapToGrid(l.geom::geometry, ${gridSize}::double precision)
+            ST_Y(ST_Centroid(ST_Collect(ap.geom::geometry)))::double precision AS latitude,
+            ST_X(ST_Centroid(ST_Collect(ap.geom::geometry)))::double precision AS longitude,
+            COUNT(*)::int AS count,
+            json_agg(DISTINCT ap.category) AS categories_json
+          FROM article_points ap
+          GROUP BY ST_SnapToGrid(ap.geom::geometry, ${gridSize}::double precision)
           ORDER BY count DESC
           LIMIT 500
         `);
@@ -351,6 +372,7 @@ export class NewsRepository {
           ) l_primary ON TRUE
           WHERE n.published_at >= NOW() - make_interval(hours => ${viewport.hours}::int)
             AND n.is_national = FALSE
+            ${categoryFilterSql}
             AND EXISTS (
               SELECT 1 FROM ${newsItemLocations} l3
               WHERE l3.news_item_id = n.id
@@ -392,33 +414,26 @@ export class NewsRepository {
       );
     }
 
-    if (viewport.categories && viewport.categories.length > 0) {
-      const categorySet = new Set(viewport.categories);
-      const filtered = features.filter((f) => {
-        if (f.isCluster) {
-          return f.topCategories.some((c) => categorySet.has(c));
-        }
-        return categorySet.has(f.category);
-      });
-      features.length = 0;
-      features.push(...filtered);
-    }
-
     let nationalItems: NationalItem[] = [];
 
     try {
+      const publishedSince = sql`NOW() - make_interval(hours => ${viewport.hours}::int)`;
+      const nationalWhere =
+        viewport.categories && viewport.categories.length > 0
+          ? and(
+              eq(newsItems.isNational, true),
+              gte(newsItems.publishedAt, publishedSince),
+              inArray(newsItems.category, viewport.categories),
+            )
+          : and(
+              eq(newsItems.isNational, true),
+              gte(newsItems.publishedAt, publishedSince),
+            );
+
       const nationalResult = await getDb()
         .select()
         .from(newsItems)
-        .where(
-          and(
-            eq(newsItems.isNational, true),
-            gte(
-              newsItems.publishedAt,
-              sql`NOW() - make_interval(hours => ${viewport.hours}::int)`,
-            ),
-          ),
-        )
+        .where(nationalWhere)
         .orderBy(desc(newsItems.publishedAt))
         .limit(100);
 
@@ -430,12 +445,6 @@ export class NewsRepository {
         category: normalizeCategory(row.category, row.isNational),
         publishedAt: row.publishedAt.toISOString(),
       }));
-
-      if (viewport.categories && viewport.categories.length > 0) {
-        nationalItems = nationalItems.filter((item) =>
-          viewport.categories?.includes(item.category),
-        );
-      }
     } catch (error) {
       logger.warn({ error }, "National items query failed");
     }

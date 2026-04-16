@@ -1225,6 +1225,26 @@ type MapClusterLayerProps<
   ) => void;
 };
 
+const CLUSTER_BUBBLE_FILTER: MapLibreGL.FilterSpecification = [
+  "any",
+  ["has", "point_count"],
+  ["==", ["coalesce", ["get", "isCluster"], false], true],
+];
+
+const RAW_POINT_FILTER: MapLibreGL.FilterSpecification = [
+  "all",
+  ["!", ["has", "point_count"]],
+  ["!=", ["coalesce", ["get", "isCluster"], false], true],
+];
+
+const CLUSTER_COUNT_EXPRESSION: MapLibreGL.ExpressionSpecification = [
+  "coalesce",
+  ["get", "articleCount"],
+  ["get", "count"],
+  ["get", "point_count"],
+  1,
+];
+
 function MapClusterLayer<
   P extends GeoJSON.GeoJsonProperties = GeoJSON.GeoJsonProperties,
 >({
@@ -1288,11 +1308,11 @@ function MapClusterLayer<
       id: clusterLayerId,
       type: "circle",
       source: sourceId,
-      filter: ["has", "point_count"],
+      filter: CLUSTER_BUBBLE_FILTER,
       paint: {
         "circle-color": [
           "step",
-          ["get", "articleCount"],
+          CLUSTER_COUNT_EXPRESSION,
           clusterColors[0],
           clusterThresholds[0],
           clusterColors[1],
@@ -1301,7 +1321,7 @@ function MapClusterLayer<
         ],
         "circle-radius": [
           "step",
-          ["get", "articleCount"],
+          CLUSTER_COUNT_EXPRESSION,
           20,
           clusterThresholds[0],
           30,
@@ -1318,9 +1338,9 @@ function MapClusterLayer<
       id: clusterCountLayerId,
       type: "symbol",
       source: sourceId,
-      filter: ["has", "point_count"],
+      filter: CLUSTER_BUBBLE_FILTER,
       layout: {
-        "text-field": ["to-string", ["get", "articleCount"]],
+        "text-field": ["to-string", CLUSTER_COUNT_EXPRESSION],
         "text-font": ["Open Sans Regular", "Noto Sans Regular"],
         "text-size": 12,
       },
@@ -1333,7 +1353,7 @@ function MapClusterLayer<
       id: unclusteredLayerId,
       type: "circle",
       source: sourceId,
-      filter: ["!", ["has", "point_count"]],
+      filter: RAW_POINT_FILTER,
       paint: {
         "circle-color": ["coalesce", ["get", "color"], pointColor],
         "circle-radius": 7,
@@ -1346,7 +1366,20 @@ function MapClusterLayer<
     return () => {
       removeClusterLayers(map);
     };
-  }, [isLoaded, map, sourceId, removeClusterLayers]);
+  }, [
+    isLoaded,
+    map,
+    sourceId,
+    removeClusterLayers,
+    clusterMaxZoom,
+    clusterRadius,
+    clusterLayerId,
+    clusterCountLayerId,
+    unclusteredLayerId,
+    clusterColors,
+    clusterThresholds,
+    pointColor,
+  ]);
 
   // Update source data when data prop changes (only for non-URL data)
   useEffect(() => {
@@ -1371,7 +1404,7 @@ function MapClusterLayer<
     if (map.getLayer(clusterLayerId) && colorsChanged) {
       map.setPaintProperty(clusterLayerId, "circle-color", [
         "step",
-        ["get", "articleCount"],
+        CLUSTER_COUNT_EXPRESSION,
         clusterColors[0],
         clusterThresholds[0],
         clusterColors[1],
@@ -1380,7 +1413,7 @@ function MapClusterLayer<
       ]);
       map.setPaintProperty(clusterLayerId, "circle-radius", [
         "step",
-        ["get", "articleCount"],
+        CLUSTER_COUNT_EXPRESSION,
         20,
         clusterThresholds[0],
         30,
@@ -1424,9 +1457,10 @@ function MapClusterLayer<
       if (!features.length) return;
 
       const feature = features[0];
-      const clusterId = feature.properties?.cluster_id as number;
+      const clusterId = Number(feature.properties?.cluster_id);
       const articleCount = Number(
         feature.properties?.articleCount ??
+          feature.properties?.count ??
           feature.properties?.point_count ??
           0,
       );
@@ -1435,15 +1469,16 @@ function MapClusterLayer<
         number,
       ];
 
-      const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
-      if (!source) return;
-
       const safeArticleCount = Number.isFinite(articleCount)
         ? Math.max(0, Math.round(articleCount))
         : 0;
 
       let leaves: GeoJSON.Feature<GeoJSON.Point, P>[] = [];
-      if (safeArticleCount > 0) {
+      const isDynamicCluster = Number.isFinite(clusterId) && clusterId >= 0;
+      if (isDynamicCluster && safeArticleCount > 0) {
+        const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+        if (!source) return;
+
         try {
           const rawLeaves = await source.getClusterLeaves(
             clusterId,
@@ -1457,14 +1492,29 @@ function MapClusterLayer<
       }
 
       if (onClusterClick) {
-        onClusterClick(clusterId, coordinates, safeArticleCount, leaves);
+        onClusterClick(
+          isDynamicCluster ? clusterId : -1,
+          coordinates,
+          safeArticleCount,
+          leaves,
+        );
       }
 
-      const zoom = await source.getClusterExpansionZoom(clusterId);
-      map.easeTo({
-        center: coordinates,
-        zoom,
-      });
+      if (isDynamicCluster) {
+        const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+        if (!source) return;
+
+        const zoom = await source.getClusterExpansionZoom(clusterId);
+        map.easeTo({
+          center: coordinates,
+          zoom,
+        });
+      } else {
+        map.easeTo({
+          center: coordinates,
+          zoom: Math.min(map.getZoom() + 1, clusterMaxZoom + 1),
+        });
+      }
     };
 
     // Unclustered point click handler
@@ -1530,6 +1580,7 @@ function MapClusterLayer<
     sourceId,
     onClusterClick,
     onPointClick,
+    clusterMaxZoom,
   ]);
 
   return null;
@@ -1575,21 +1626,21 @@ function MapTileSelector({
       data-tile-selector
     >
       <div className="relative">
-        <ControlGroup>
-          <ControlButton
-            onClick={() => setIsOpen((prev) => !prev)}
-            label={`Map style: ${selected?.label ?? "Default"}`}
-          >
-            <Layers className="size-4" />
-          </ControlButton>
-        </ControlGroup>
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          aria-label={`Map style: ${selected?.label ?? "Default"}`}
+          className="flex items-center justify-center rounded-lg border border-white/15 bg-white/5 backdrop-blur-xl size-8 text-slate-300 transition-all duration-150 hover:bg-white/10 hover:text-white"
+        >
+          <Layers className="size-4" />
+        </button>
 
         {isOpen && (
           <div
             className={cn(
               "absolute bottom-full mb-1.5 left-0",
-              "bg-background border-border rounded-md border shadow-lg",
-              "min-w-[120px] py-1 animate-in fade-in-0 zoom-in-95",
+              "rounded-xl border border-white/15 bg-white/5 backdrop-blur-xl shadow-[0_18px_50px_-25px_rgba(15,23,42,0.9)]",
+              "min-w-35 p-1 animate-in fade-in-0 zoom-in-95",
             )}
           >
             {styles.map((style) => (
@@ -1601,15 +1652,13 @@ function MapTileSelector({
                   setIsOpen(false);
                 }}
                 className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors",
+                  "flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs transition-all duration-150",
                   value === style.id
-                    ? "bg-accent text-accent-foreground font-medium"
-                    : "hover:bg-accent/50 text-foreground",
+                    ? "bg-white/10 text-white font-medium"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white",
                 )}
               >
-                {value === style.id && (
-                  <span className="text-accent-foreground">✓</span>
-                )}
+                {value === style.id && <span className="text-sky-400">✓</span>}
                 {value !== style.id && <span className="w-3" />}
                 {style.label}
               </button>

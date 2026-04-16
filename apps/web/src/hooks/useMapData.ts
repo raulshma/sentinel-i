@@ -85,7 +85,7 @@ export const useMapData = (hours = 24, categories?: string[]) => {
       minLat: bounds.minLat.toString(),
       maxLng: bounds.maxLng.toString(),
       maxLat: bounds.maxLat.toString(),
-      zoom: Math.round(bounds.zoom).toString(),
+      zoom: bounds.zoom.toString(),
       hours: hoursRef.current.toString(),
     });
 
