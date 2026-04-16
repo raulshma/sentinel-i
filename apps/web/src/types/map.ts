@@ -74,6 +74,14 @@ export interface ViewportBounds {
   zoom: number;
 }
 
+export interface MapUpdatePulse {
+  id: string;
+  latitude: number;
+  longitude: number;
+  category: NewsCategory;
+  emittedAt: number;
+}
+
 export const CATEGORY_COLORS: Record<NewsCategory, string> = {
   Politics: "#ef4444",
   Business: "#f59e0b",

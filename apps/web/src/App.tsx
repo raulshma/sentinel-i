@@ -2,10 +2,11 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { CreditCard } from "lucide-react";
 
 import { FilterPanel } from "./components/FilterPanel";
+import { ArticleToastStack } from "./components/ArticleToastStack";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { UsageFlyout } from "./components/UsageFlyout";
 import { useDeepLink } from "./hooks/useDeepLink";
-import { useMapData } from "./hooks/useMapData";
+import { type ArticleAddedEvent, useMapData } from "./hooks/useMapData";
 import { useProcessingLogs } from "./hooks/useProcessingLogs";
 import { useRealtimeStats } from "./hooks/useRealtimeStats";
 import { useUsageLimits } from "./hooks/useUsageLimits";
@@ -42,6 +43,10 @@ const CATEGORY_ENTRIES: Array<{ label: string; color: string }> = [
   { label: "General", color: CATEGORY_COLORS.General },
 ];
 
+type ArticleToastItem = ArticleAddedEvent & {
+  toastId: string;
+};
+
 function App() {
   const { connectedUsers, isSocketConnected, mode } = useRealtimeStats();
   const { initialState, pushState } = useDeepLink();
@@ -66,12 +71,42 @@ function App() {
   const [showNational, setShowNational] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
+  const [articleToasts, setArticleToasts] = useState<ArticleToastItem[]>([]);
 
-  const { features, nationalItems, isLoading, debouncedFetchViewport } =
-    useMapData(
-      hours,
-      selectedCategories.length > 0 ? selectedCategories : undefined,
+  const {
+    features,
+    nationalItems,
+    isLoading,
+    latestAddedArticle,
+    latestMapPulse,
+    debouncedFetchViewport,
+  } = useMapData(
+    hours,
+    selectedCategories.length > 0 ? selectedCategories : undefined,
+  );
+
+  const handleDismissToast = useCallback((toastId: string) => {
+    setArticleToasts((prev) =>
+      prev.filter((toast) => toast.toastId !== toastId),
     );
+  }, []);
+
+  useEffect(() => {
+    if (!latestAddedArticle) return;
+
+    const toastId = `${latestAddedArticle.id}-${Date.now()}`;
+
+    setArticleToasts((prev) => {
+      const withoutDuplicateArticle = prev.filter(
+        (toast) => toast.id !== latestAddedArticle.id,
+      );
+
+      return [
+        { ...latestAddedArticle, toastId },
+        ...withoutDuplicateArticle,
+      ].slice(0, 4);
+    });
+  }, [latestAddedArticle]);
 
   const handleFeatureClick = useCallback((feature: MapFeature) => {
     setSelectedFeature(feature);
@@ -195,6 +230,11 @@ function App() {
         role="region"
         aria-label="Interactive news map"
       >
+        <ArticleToastStack
+          toasts={articleToasts}
+          onDismiss={handleDismissToast}
+        />
+
         <Suspense
           fallback={
             <div
@@ -213,6 +253,7 @@ function App() {
             onFeatureClick={handleFeatureClick}
             initialCenter={initialState.center}
             initialZoom={initialState.zoom}
+            liveUpdatePulse={latestMapPulse}
           />
         </Suspense>
 

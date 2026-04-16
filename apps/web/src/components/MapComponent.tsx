@@ -16,6 +16,7 @@ import {
   CATEGORY_COLORS,
   type MapFeature,
   type MapMarker,
+  type MapUpdatePulse,
   type NewsCategory,
 } from "@/types/map";
 
@@ -167,6 +168,7 @@ interface MapComponentProps {
   onFeatureClick?: (feature: MapFeature) => void;
   initialCenter?: [number, number];
   initialZoom?: number;
+  liveUpdatePulse?: MapUpdatePulse | null;
 }
 
 export function MapComponent({
@@ -176,6 +178,7 @@ export function MapComponent({
   onFeatureClick,
   initialCenter,
   initialZoom,
+  liveUpdatePulse,
 }: MapComponentProps) {
   const mapCenter = initialCenter ?? INDIA_CENTER;
   const mapZoom = initialZoom ?? DEFAULT_ZOOM;
@@ -436,6 +439,8 @@ export function MapComponent({
           onClusterClick={handleClusterClick}
         />
 
+        <LiveUpdatePulseLayer pulse={liveUpdatePulse ?? null} />
+
         <HighlightLayer
           features={highlightFeatures}
           highlightedArticleId={highlightedArticleId}
@@ -586,6 +591,102 @@ function HighlightLayer({
 
     source.setData({ type: "FeatureCollection", features: geojsonFeatures });
   }, [isLoaded, map, features, highlightedArticleId]);
+
+  return null;
+}
+
+function LiveUpdatePulseLayer({ pulse }: { pulse: MapUpdatePulse | null }) {
+  const { map, isLoaded } = useMap();
+  const layerId = "live-update-pulse";
+  const sourceId = "live-update-pulse-source";
+
+  useEffect(() => {
+    if (!isLoaded || !map) return;
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+    }
+
+    if (!map.getLayer(layerId)) {
+      map.addLayer({
+        id: layerId,
+        type: "circle",
+        source: sourceId,
+        paint: {
+          "circle-radius": 0,
+          "circle-color": ["coalesce", ["get", "color"], "#38bdf8"],
+          "circle-opacity": 0,
+          "circle-stroke-width": 2,
+          "circle-stroke-color": ["coalesce", ["get", "color"], "#38bdf8"],
+          "circle-stroke-opacity": 0,
+          "circle-radius-transition": { duration: 700, delay: 0 },
+          "circle-opacity-transition": { duration: 700, delay: 0 },
+          "circle-stroke-opacity-transition": { duration: 700, delay: 0 },
+        },
+      });
+    }
+
+    return () => {
+      try {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      } catch {
+        // ignore
+      }
+    };
+  }, [isLoaded, map]);
+
+  useEffect(() => {
+    if (!isLoaded || !map || !map.getSource(sourceId)) return;
+
+    const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+
+    if (!pulse) {
+      source.setData({ type: "FeatureCollection", features: [] });
+      return;
+    }
+
+    source.setData({
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [pulse.longitude, pulse.latitude],
+          },
+          properties: {
+            color: CATEGORY_COLORS[pulse.category],
+          },
+        },
+      ],
+    });
+
+    map.setPaintProperty(layerId, "circle-radius", 4);
+    map.setPaintProperty(layerId, "circle-opacity", 0.45);
+    map.setPaintProperty(layerId, "circle-stroke-opacity", 0.85);
+
+    const frameId = requestAnimationFrame(() => {
+      if (!map.getLayer(layerId)) return;
+
+      map.setPaintProperty(layerId, "circle-radius", 24);
+      map.setPaintProperty(layerId, "circle-opacity", 0);
+      map.setPaintProperty(layerId, "circle-stroke-opacity", 0);
+    });
+
+    const cleanupTimeout = setTimeout(() => {
+      if (!map.getSource(sourceId)) return;
+      source.setData({ type: "FeatureCollection", features: [] });
+    }, 760);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      clearTimeout(cleanupTimeout);
+    };
+  }, [isLoaded, map, pulse]);
 
   return null;
 }

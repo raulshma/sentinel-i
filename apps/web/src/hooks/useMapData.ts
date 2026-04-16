@@ -1,7 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { getSocket } from "../lib/socket";
 
-import type { NationalItem, NewsItemLocation } from "../types/map";
+import type {
+  MapUpdatePulse,
+  NationalItem,
+  NewsItemLocation,
+} from "../types/map";
 import type {
   ClusteredViewportResponse,
   MapFeature,
@@ -18,6 +29,14 @@ type SocketArticle = NationalItem & {
 type SocketPayload = {
   article: SocketArticle;
   locations: NewsItemLocation[];
+};
+
+export type ArticleAddedEvent = {
+  id: string;
+  headline: string;
+  category: NationalItem["category"];
+  location: string;
+  publishedAt: string;
 };
 
 function deduplicateFeatures(features: MapFeature[]): MapFeature[] {
@@ -55,6 +74,11 @@ export const useMapData = (hours = 24, categories?: string[]) => {
   const [nationalItems, setNationalItems] = useState<NationalItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [latestAddedArticle, setLatestAddedArticle] =
+    useState<ArticleAddedEvent | null>(null);
+  const [latestMapPulse, setLatestMapPulse] = useState<MapUpdatePulse | null>(
+    null,
+  );
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const hoursRef = useRef(hours);
@@ -112,8 +136,10 @@ export const useMapData = (hours = 24, categories?: string[]) => {
         !controller.signal.aborted &&
         activeRequestRef.current === requestId
       ) {
-        setFeatures(deduplicateFeatures(data.features));
-        setNationalItems(deduplicateNationalItems(data.nationalItems));
+        startTransition(() => {
+          setFeatures(deduplicateFeatures(data.features));
+          setNationalItems(deduplicateNationalItems(data.nationalItems));
+        });
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -158,10 +184,12 @@ export const useMapData = (hours = 24, categories?: string[]) => {
 
     const onNewsCreated = (payload: SocketPayload) => {
       const { article, locations } = payload;
+      let wasAddedToNational = false;
 
       if (article.isNational || locations.length === 0) {
         setNationalItems((prev) => {
           if (prev.some((n) => n.id === article.id)) return prev;
+          wasAddedToNational = true;
           return [article, ...prev].slice(0, 100);
         });
       }
@@ -172,41 +200,73 @@ export const useMapData = (hours = 24, categories?: string[]) => {
 
       const primaryLocation =
         geocodedLocations.find((loc) => loc.isPrimary) ?? geocodedLocations[0];
+      let wasAddedToFeatures = false;
 
-      if (!primaryLocation) return;
+      if (primaryLocation) {
+        const allCities = [
+          ...new Set(
+            locations
+              .map((loc) => loc.city)
+              .filter((c): c is string => c !== null),
+          ),
+        ];
 
-      const allCities = [
-        ...new Set(
-          locations
-            .map((loc) => loc.city)
-            .filter((c): c is string => c !== null),
-        ),
-      ];
+        setFeatures((prev) => {
+          const existingNewsItemIds = new Set(
+            prev.filter((f) => !f.isCluster).map((f) => f.newsItemId),
+          );
 
-      setFeatures((prev) => {
-        const existingNewsItemIds = new Set(
-          prev.filter((f) => !f.isCluster).map((f) => f.newsItemId),
-        );
+          if (existingNewsItemIds.has(article.id)) return prev;
 
-        if (existingNewsItemIds.has(article.id)) return prev;
+          wasAddedToFeatures = true;
 
-        const marker: MapFeature = {
-          id: primaryLocation.id,
-          newsItemId: article.id,
-          cities: allCities,
-          latitude: primaryLocation.latitude!,
-          longitude: primaryLocation.longitude!,
-          category: article.category,
-          headline: article.headline,
-          summary: article.summary,
-          sourceUrl: article.sourceUrl,
-          city: primaryLocation.city,
-          state: primaryLocation.state,
-          publishedAt: article.publishedAt,
-          isCluster: false,
-        };
+          const marker: MapFeature = {
+            id: primaryLocation.id,
+            newsItemId: article.id,
+            cities: allCities,
+            latitude: primaryLocation.latitude!,
+            longitude: primaryLocation.longitude!,
+            category: article.category,
+            headline: article.headline,
+            summary: article.summary,
+            sourceUrl: article.sourceUrl,
+            city: primaryLocation.city,
+            state: primaryLocation.state,
+            publishedAt: article.publishedAt,
+            isCluster: false,
+          };
 
-        return [marker, ...prev].slice(0, 500);
+          return [marker, ...prev].slice(0, 500);
+        });
+
+        if (wasAddedToFeatures) {
+          setLatestMapPulse({
+            id: article.id,
+            latitude: primaryLocation.latitude!,
+            longitude: primaryLocation.longitude!,
+            category: article.category,
+            emittedAt: Date.now(),
+          });
+        }
+      }
+
+      if (!wasAddedToNational && !wasAddedToFeatures) return;
+
+      const namedLocation = locations.find((loc) => loc.city || loc.state);
+      const locationLabel = article.isNational
+        ? "National"
+        : (primaryLocation?.city ??
+          primaryLocation?.state ??
+          namedLocation?.city ??
+          namedLocation?.state ??
+          "India");
+
+      setLatestAddedArticle({
+        id: article.id,
+        headline: article.headline,
+        category: article.category,
+        location: locationLabel,
+        publishedAt: article.publishedAt,
       });
     };
 
@@ -234,8 +294,18 @@ export const useMapData = (hours = 24, categories?: string[]) => {
       nationalItems,
       isLoading,
       error,
+      latestAddedArticle,
+      latestMapPulse,
       debouncedFetchViewport,
     }),
-    [features, nationalItems, isLoading, error, debouncedFetchViewport],
+    [
+      features,
+      nationalItems,
+      isLoading,
+      error,
+      latestAddedArticle,
+      latestMapPulse,
+      debouncedFetchViewport,
+    ],
   );
 };

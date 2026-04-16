@@ -1331,6 +1331,9 @@ function MapClusterLayer<
         "circle-stroke-width": 1,
         "circle-stroke-color": "#fff",
         "circle-opacity": 0.85,
+        "circle-color-transition": { duration: 320, delay: 0 },
+        "circle-radius-transition": { duration: 420, delay: 0 },
+        "circle-opacity-transition": { duration: 280, delay: 0 },
       },
     });
 
@@ -1346,6 +1349,8 @@ function MapClusterLayer<
       },
       paint: {
         "text-color": "#fff",
+        "text-opacity": 1,
+        "text-opacity-transition": { duration: 280, delay: 0 },
       },
     });
 
@@ -1360,6 +1365,9 @@ function MapClusterLayer<
         "circle-stroke-width": 2,
         "circle-stroke-color": "#fff",
         "circle-opacity": 0.9,
+        "circle-color-transition": { duration: 280, delay: 0 },
+        "circle-radius-transition": { duration: 300, delay: 0 },
+        "circle-opacity-transition": { duration: 240, delay: 0 },
       },
     });
 
