@@ -1,126 +1,150 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { CATEGORY_COLORS, type MapFeature, type NewsCategory } from '../types/map'
-import { ScrollArea, ScrollAreaViewport } from './ui/scroll-area'
+import {
+  CATEGORY_COLORS,
+  type MapFeature,
+  type NewsCategory,
+} from "../types/map";
+import { ScrollArea, ScrollAreaViewport } from "./ui/scroll-area";
 
 interface CarouselItem {
-  id: string
-  headline: string
-  summary: string
-  sourceUrl: string
-  category: NewsCategory
-  publishedAt: string
-  city: string | null
-  state: string | null
-  cities: string[]
+  id: string;
+  headline: string;
+  summary: string;
+  sourceUrl: string;
+  category: NewsCategory;
+  publishedAt: string;
+  city: string | null;
+  state: string | null;
+  cities: string[];
 }
 
 interface NewsCarouselProps {
-  feature: MapFeature | null
-  clusterArticles?: CarouselItem[]
-  isLoadingCluster?: boolean
-  onClose: () => void
+  feature: MapFeature | null;
+  clusterArticles?: CarouselItem[];
+  isLoadingCluster?: boolean;
+  hours?: number;
+  onClose: () => void;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 function getClusterRadiusMeters(zoom: number): number {
-  let gridSizeDegrees: number
-  if (zoom <= 4) gridSizeDegrees = 3.0
-  else if (zoom <= 6) gridSizeDegrees = 1.5
-  else if (zoom <= 8) gridSizeDegrees = 0.8
-  else if (zoom <= 10) gridSizeDegrees = 0.3
-  else gridSizeDegrees = 0.1
-  return Math.round(gridSizeDegrees * 111000 * 0.6)
+  let gridSizeDegrees: number;
+  if (zoom <= 4) gridSizeDegrees = 3.0;
+  else if (zoom <= 6) gridSizeDegrees = 1.5;
+  else if (zoom <= 8) gridSizeDegrees = 0.8;
+  else if (zoom <= 10) gridSizeDegrees = 0.3;
+  else gridSizeDegrees = 0.1;
+  return Math.round(gridSizeDegrees * 111000 * 0.6);
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString('en-IN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  })
+  return new Date(iso).toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
-function useClusterArticles(feature: MapFeature | null, hours: number) {
-  const [articles, setArticles] = useState<CarouselItem[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+function useClusterArticles(
+  feature: MapFeature | null,
+  hours: number,
+  enabled: boolean,
+) {
+  const [articles, setArticles] = useState<CarouselItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (!feature || !feature.isCluster) {
+    if (!feature || !feature.isCluster || !enabled) {
       if (feature && !feature.isCluster) {
-        setArticles([])
+        setArticles([]);
       }
-      return
+      setIsLoading(false);
+      return;
     }
 
-    let cancelled = false
+    let cancelled = false;
 
     const fetchArticles = async () => {
-      setIsLoading(true)
+      setIsLoading(true);
       try {
-        const zoom = feature.zoom ?? 4
-        const radiusMeters = getClusterRadiusMeters(zoom)
+        const zoom = feature.zoom ?? 4;
+        const radiusMeters = getClusterRadiusMeters(zoom);
 
         const params = new URLSearchParams({
           longitude: feature.longitude.toString(),
           latitude: feature.latitude.toString(),
           radius: radiusMeters.toString(),
-          limit: '20',
+          limit: Math.max(1, Math.min(feature.count ?? 20, 50)).toString(),
           hours: hours.toString(),
-        })
+        });
 
-        const response = await fetch(`${API_BASE}/api/v1/news/cluster-articles?${params}`)
+        const response = await fetch(
+          `${API_BASE}/api/v1/news/cluster-articles?${params}`,
+        );
 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        const data = (await response.json()) as { data: CarouselItem[] }
+        const data = (await response.json()) as { data: CarouselItem[] };
         if (!cancelled) {
-          setArticles(data.data ?? [])
+          setArticles(data.data ?? []);
         }
       } catch {
-        if (!cancelled) setArticles([])
+        if (!cancelled) setArticles([]);
       } finally {
-        if (!cancelled) setIsLoading(false)
+        if (!cancelled) setIsLoading(false);
       }
-    }
+    };
 
-    void fetchArticles()
+    void fetchArticles();
 
     return () => {
-      cancelled = true
-    }
-  }, [feature, hours])
+      cancelled = true;
+    };
+  }, [feature, hours, enabled]);
 
-  return { articles, isLoading }
+  return { articles, isLoading };
 }
 
 export function NewsCarousel({
   feature,
   clusterArticles: externalClusterArticles,
   isLoadingCluster: externalIsLoading,
+  hours = 24,
   onClose,
 }: NewsCarouselProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const [currentIndex, setCurrentIndex] = useState(0)
-  const prevFeatureIdRef = useRef<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const prevFeatureIdRef = useRef<string | null>(null);
 
   if (feature?.id !== prevFeatureIdRef.current) {
-    prevFeatureIdRef.current = feature?.id ?? null
+    prevFeatureIdRef.current = feature?.id ?? null;
     if (currentIndex !== 0) {
-      setCurrentIndex(0)
+      setCurrentIndex(0);
     }
   }
 
+  const featureClusterArticles = feature?.isCluster
+    ? feature.clusterArticles
+    : undefined;
+
+  const providedClusterArticles =
+    externalClusterArticles ?? featureClusterArticles;
+
+  const shouldFetchClusterArticles =
+    Boolean(feature?.isCluster) && !providedClusterArticles;
+
   const clusterResult = useClusterArticles(
-    feature?.isCluster ? feature : null,
-    24,
-  )
+    shouldFetchClusterArticles && feature?.isCluster ? feature : null,
+    hours,
+    shouldFetchClusterArticles,
+  );
 
   const items = useMemo<CarouselItem[]>(() => {
-    if (!feature) return []
+    if (!feature) return [];
 
     if (feature.isCluster) {
-      return externalClusterArticles ?? clusterResult.articles
+      return providedClusterArticles ?? clusterResult.articles;
     }
 
     return [
@@ -135,71 +159,73 @@ export function NewsCarousel({
         state: feature.state,
         cities: Array.isArray(feature.cities) ? feature.cities : [],
       },
-    ]
-  }, [feature, externalClusterArticles, clusterResult.articles])
+    ];
+  }, [feature, providedClusterArticles, clusterResult.articles]);
 
   const isLoading = feature?.isCluster
-    ? (externalIsLoading ?? clusterResult.isLoading)
-    : false
+    ? (externalIsLoading ??
+      (shouldFetchClusterArticles ? clusterResult.isLoading : false))
+    : false;
 
   const scrollToIndex = useCallback((index: number) => {
-    if (!scrollRef.current) return
-    const child = scrollRef.current.children[index] as HTMLElement
+    if (!scrollRef.current) return;
+    const child = scrollRef.current.children[index] as HTMLElement;
     if (child) {
       scrollRef.current.scrollTo({
         left: child.offsetLeft - scrollRef.current.offsetLeft,
-        behavior: 'smooth',
-      })
-      setCurrentIndex(index)
+        behavior: "smooth",
+      });
+      setCurrentIndex(index);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollLeft = 0
+      scrollRef.current.scrollLeft = 0;
     }
-  }, [feature?.id])
+  }, [feature?.id]);
 
   useEffect(() => {
-    if (!feature) return
+    if (!feature) return;
 
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-      } else if (e.key === 'ArrowRight' && currentIndex < items.length - 1) {
-        scrollToIndex(currentIndex + 1)
-      } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
-        scrollToIndex(currentIndex - 1)
+      if (e.key === "Escape") {
+        onClose();
+      } else if (e.key === "ArrowRight" && currentIndex < items.length - 1) {
+        scrollToIndex(currentIndex + 1);
+      } else if (e.key === "ArrowLeft" && currentIndex > 0) {
+        scrollToIndex(currentIndex - 1);
       }
-    }
+    };
 
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [feature, currentIndex, items.length, onClose, scrollToIndex])
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [feature, currentIndex, items.length, onClose, scrollToIndex]);
 
   const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return
-    const scrollLeft = scrollRef.current.scrollLeft
-    const childWidth = (scrollRef.current.children[0] as HTMLElement)?.offsetWidth ?? 1
-    const gap = 12
-    const newIndex = Math.round(scrollLeft / (childWidth + gap))
+    if (!scrollRef.current) return;
+    const scrollLeft = scrollRef.current.scrollLeft;
+    const childWidth =
+      (scrollRef.current.children[0] as HTMLElement)?.offsetWidth ?? 1;
+    const gap = 12;
+    const newIndex = Math.round(scrollLeft / (childWidth + gap));
     if (newIndex !== currentIndex && newIndex >= 0 && newIndex < items.length) {
-      setCurrentIndex(newIndex)
+      setCurrentIndex(newIndex);
     }
-  }, [currentIndex, items.length])
+  }, [currentIndex, items.length]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose()
+      if (e.target === e.currentTarget) onClose();
     },
     [onClose],
-  )
+  );
 
-  if (!feature) return null
+  if (!feature) return null;
 
   const categoryColor = feature.isCluster
-    ? CATEGORY_COLORS[feature.topCategories[0] ?? 'General']
-    : CATEGORY_COLORS[feature.category]
+    ? CATEGORY_COLORS[feature.topCategories[0] ?? "General"]
+    : CATEGORY_COLORS[feature.category];
 
   return (
     <div
@@ -207,7 +233,11 @@ export function NewsCarousel({
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
-      aria-label={feature.isCluster ? `News cluster with ${feature.count} articles` : `News article: ${feature.headline}`}
+      aria-label={
+        feature.isCluster
+          ? `News cluster with ${feature.count} articles`
+          : `News article: ${feature.headline}`
+      }
     >
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" />
 
@@ -221,7 +251,10 @@ export function NewsCarousel({
           <div className="flex items-center gap-3">
             <span
               className="inline-block h-3 w-3 rounded-full shadow-sm"
-              style={{ backgroundColor: categoryColor, boxShadow: `0 0 8px ${categoryColor}60` }}
+              style={{
+                backgroundColor: categoryColor,
+                boxShadow: `0 0 8px ${categoryColor}60`,
+              }}
             />
             {feature.isCluster ? (
               <span className="text-sm font-semibold text-white">
@@ -230,8 +263,8 @@ export function NewsCarousel({
             ) : (
               <span className="text-xs font-medium text-slate-300">
                 {feature.category}
-                {feature.city ? ` · ${feature.city}` : ''}
-                {feature.state ? `, ${feature.state}` : ''}
+                {feature.city ? ` · ${feature.city}` : ""}
+                {feature.state ? `, ${feature.state}` : ""}
               </span>
             )}
           </div>
@@ -241,7 +274,14 @@ export function NewsCarousel({
             aria-label="Close news carousel"
             className="rounded-lg p-2 text-slate-400 transition-all duration-150 hover:bg-white/10 hover:text-white hover:rotate-90 focus:outline-none focus:ring-2 focus:ring-sky-400"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
@@ -266,7 +306,14 @@ export function NewsCarousel({
                   aria-label="Previous article"
                   className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all duration-150 hover:bg-slate-700/90 hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
                 </button>
@@ -278,7 +325,14 @@ export function NewsCarousel({
                   aria-label="Next article"
                   className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/15 bg-slate-800/90 p-2 text-white shadow-lg backdrop-blur-sm transition-all duration-150 hover:bg-slate-700/90 hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
                     <path d="M9 18l6-6-6-6" />
                   </svg>
                 </button>
@@ -287,7 +341,7 @@ export function NewsCarousel({
                 ref={scrollRef}
                 onScroll={handleScroll}
                 className="flex snap-x snap-mandatory gap-4 overflow-x-auto overflow-y-hidden px-5 py-5 scroll-smooth"
-                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
                 role="list"
                 aria-label="News articles carousel"
                 tabIndex={0}
@@ -302,7 +356,7 @@ export function NewsCarousel({
                     <div
                       className="h-1 transition-all duration-300"
                       style={{
-                        background: `linear-gradient(90deg, ${CATEGORY_COLORS[item.category] ?? '#64748b'}, transparent)`,
+                        background: `linear-gradient(90deg, ${CATEGORY_COLORS[item.category] ?? "#64748b"}, transparent)`,
                       }}
                     />
                     <ScrollArea className="min-h-0 flex-1">
@@ -310,7 +364,10 @@ export function NewsCarousel({
                         <div className="mb-3 flex items-center gap-2">
                           <span
                             className="inline-block h-2 w-2 rounded-full"
-                            style={{ backgroundColor: CATEGORY_COLORS[item.category] ?? '#64748b' }}
+                            style={{
+                              backgroundColor:
+                                CATEGORY_COLORS[item.category] ?? "#64748b",
+                            }}
                           />
                           <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
                             {item.category}
@@ -320,7 +377,13 @@ export function NewsCarousel({
                           </span>
                         </div>
 
-                        <h3 className="mb-3 text-base font-bold leading-snug text-white" style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}>
+                        <h3
+                          className="mb-3 text-base font-bold leading-snug text-white"
+                          style={{
+                            overflowWrap: "break-word",
+                            wordBreak: "break-word",
+                          }}
+                        >
                           {item.headline}
                         </h3>
 
@@ -338,7 +401,13 @@ export function NewsCarousel({
                         )}
 
                         {item.summary && (
-                          <p className="mb-4 text-[13px] leading-relaxed text-slate-300/90" style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}>
+                          <p
+                            className="mb-4 text-[13px] leading-relaxed text-slate-300/90"
+                            style={{
+                              overflowWrap: "break-word",
+                              wordBreak: "break-word",
+                            }}
+                          >
                             {item.summary}
                           </p>
                         )}
@@ -351,7 +420,14 @@ export function NewsCarousel({
                             className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-400 transition-all duration-150 hover:bg-sky-400/20 hover:border-sky-400/30 hover:gap-2 hover:scale-[1.03] active:scale-[0.98]"
                           >
                             Read source
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                            >
                               <path d="M7 17L17 7M17 7H7M17 7v10" />
                             </svg>
                           </a>
@@ -368,7 +444,11 @@ export function NewsCarousel({
                 <span className="text-[11px] text-slate-500">
                   {currentIndex + 1} of {items.length}
                 </span>
-                <div className="flex items-center gap-1.5" role="tablist" aria-label="Carousel pagination">
+                <div
+                  className="flex items-center gap-1.5"
+                  role="tablist"
+                  aria-label="Carousel pagination"
+                >
                   {items.map((_, i) => (
                     <button
                       key={i}
@@ -379,8 +459,8 @@ export function NewsCarousel({
                       aria-label={`Go to article ${i + 1}`}
                       className={`h-1.5 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
                         i === currentIndex
-                          ? 'w-5 bg-sky-400'
-                          : 'w-1.5 bg-white/15 hover:bg-white/30'
+                          ? "w-5 bg-sky-400"
+                          : "w-1.5 bg-white/15 hover:bg-white/30"
                       }`}
                     />
                   ))}
@@ -391,5 +471,5 @@ export function NewsCarousel({
         )}
       </div>
     </div>
-  )
+  );
 }

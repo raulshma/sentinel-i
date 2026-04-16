@@ -15,6 +15,7 @@ import {
 import {
   CATEGORY_COLORS,
   type MapFeature,
+  type MapMarker,
   type NewsCategory,
 } from "@/types/map";
 
@@ -74,6 +75,14 @@ function normalizeCities(cities: unknown): string[] {
   return [];
 }
 
+function normalizeCategory(category: string): NewsCategory {
+  if (category in CATEGORY_COLORS) {
+    return category as NewsCategory;
+  }
+
+  return "General";
+}
+
 const INDIA_CENTER: [number, number] = [78.9629, 20.5937];
 const DEFAULT_ZOOM = 4.5;
 
@@ -100,6 +109,33 @@ interface NewsProperties {
   summary: string;
   sourceUrl: string;
   publishedAt: string;
+}
+
+function toMapMarker(
+  feature: GeoJSON.Feature<GeoJSON.Point, NewsProperties>,
+): MapMarker | null {
+  const properties = feature.properties;
+  if (!properties || properties.isCluster || !properties.newsItemId) {
+    return null;
+  }
+
+  const [longitude, latitude] = feature.geometry.coordinates;
+
+  return {
+    id: properties.id,
+    newsItemId: properties.newsItemId,
+    cities: normalizeCities(properties.cities),
+    latitude,
+    longitude,
+    category: normalizeCategory(properties.category),
+    headline: properties.headline,
+    summary: properties.summary,
+    sourceUrl: properties.sourceUrl,
+    city: properties.city,
+    state: properties.state,
+    publishedAt: properties.publishedAt,
+    isCluster: false,
+  };
 }
 
 interface MapComponentProps {
@@ -132,7 +168,9 @@ export function MapComponent({
     try {
       const saved = localStorage.getItem(TILE_STORAGE_KEY);
       if (saved && TILE_URLS[saved]) return saved;
-    } catch { /* localStorage unavailable */ }
+    } catch {
+      /* localStorage unavailable */
+    }
     return "dark";
   });
 
@@ -141,7 +179,9 @@ export function MapComponent({
     setTileStyle(id);
     try {
       localStorage.setItem(TILE_STORAGE_KEY, id);
-    } catch { /* localStorage unavailable */ }
+    } catch {
+      /* localStorage unavailable */
+    }
   }, []);
 
   const tileStyles = useMemo(
@@ -287,14 +327,44 @@ export function MapComponent({
   );
 
   const handleClusterClick = useCallback(
-    (_clusterId: number, coordinates: [number, number], pointCount: number) => {
+    (
+      _clusterId: number,
+      coordinates: [number, number],
+      pointCount: number,
+      leaves: GeoJSON.Feature<GeoJSON.Point, NewsProperties>[],
+    ) => {
+      const uniqueArticles = new Map<string, MapMarker>();
+      const categoryCounts = new Map<NewsCategory, number>();
+
+      for (const leaf of leaves) {
+        const marker = toMapMarker(leaf);
+        if (!marker || uniqueArticles.has(marker.newsItemId)) continue;
+
+        uniqueArticles.set(marker.newsItemId, marker);
+        categoryCounts.set(
+          marker.category,
+          (categoryCounts.get(marker.category) ?? 0) + 1,
+        );
+      }
+
+      const clusterArticles = [...uniqueArticles.values()];
+      const topCategories =
+        categoryCounts.size > 0
+          ? ([...categoryCounts.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 3)
+              .map(([category]) => category) as NewsCategory[])
+          : (["General"] as NewsCategory[]);
+
       const mapFeature: MapFeature = {
         id: `cluster-${coordinates[0]}-${coordinates[1]}`,
         latitude: coordinates[1],
         longitude: coordinates[0],
         count: pointCount,
-        topCategories: ["General"],
+        topCategories,
         zoom: currentZoomRef.current,
+        clusterArticles:
+          clusterArticles.length > 0 ? clusterArticles : undefined,
         isCluster: true,
       };
 

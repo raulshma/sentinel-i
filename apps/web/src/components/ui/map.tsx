@@ -1221,6 +1221,7 @@ type MapClusterLayerProps<
     clusterId: number,
     coordinates: [number, number],
     pointCount: number,
+    leaves: GeoJSON.Feature<GeoJSON.Point, P>[],
   ) => void;
 };
 
@@ -1249,20 +1250,22 @@ function MapClusterLayer<
     pointColor,
   });
 
-  const removeClusterLayers = useCallback((mapInstance: MapLibreGL.Map) => {
-    try {
-      if (mapInstance.getLayer(clusterCountLayerId))
-        mapInstance.removeLayer(clusterCountLayerId);
-      if (mapInstance.getLayer(unclusteredLayerId))
-        mapInstance.removeLayer(unclusteredLayerId);
-      if (mapInstance.getLayer(clusterLayerId))
-        mapInstance.removeLayer(clusterLayerId);
-      if (mapInstance.getSource(sourceId))
-        mapInstance.removeSource(sourceId);
-    } catch {
-      // ignore
-    }
-  }, [clusterCountLayerId, unclusteredLayerId, clusterLayerId, sourceId]);
+  const removeClusterLayers = useCallback(
+    (mapInstance: MapLibreGL.Map) => {
+      try {
+        if (mapInstance.getLayer(clusterCountLayerId))
+          mapInstance.removeLayer(clusterCountLayerId);
+        if (mapInstance.getLayer(unclusteredLayerId))
+          mapInstance.removeLayer(unclusteredLayerId);
+        if (mapInstance.getLayer(clusterLayerId))
+          mapInstance.removeLayer(clusterLayerId);
+        if (mapInstance.getSource(sourceId)) mapInstance.removeSource(sourceId);
+      } catch {
+        // ignore
+      }
+    },
+    [clusterCountLayerId, unclusteredLayerId, clusterLayerId, sourceId],
+  );
 
   // Add source and layers on mount
   useEffect(() => {
@@ -1332,11 +1335,7 @@ function MapClusterLayer<
       source: sourceId,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-color": [
-          "coalesce",
-          ["get", "color"],
-          pointColor,
-        ],
+        "circle-color": ["coalesce", ["get", "color"], pointColor],
         "circle-radius": 7,
         "circle-stroke-width": 2,
         "circle-stroke-color": "#fff",
@@ -1426,17 +1425,41 @@ function MapClusterLayer<
 
       const feature = features[0];
       const clusterId = feature.properties?.cluster_id as number;
-      const articleCount = feature.properties?.articleCount as number;
+      const articleCount = Number(
+        feature.properties?.articleCount ??
+          feature.properties?.point_count ??
+          0,
+      );
       const coordinates = (feature.geometry as GeoJSON.Point).coordinates as [
         number,
         number,
       ];
 
-      if (onClusterClick) {
-        onClusterClick(clusterId, coordinates, articleCount);
+      const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+      if (!source) return;
+
+      const safeArticleCount = Number.isFinite(articleCount)
+        ? Math.max(0, Math.round(articleCount))
+        : 0;
+
+      let leaves: GeoJSON.Feature<GeoJSON.Point, P>[] = [];
+      if (safeArticleCount > 0) {
+        try {
+          const rawLeaves = await source.getClusterLeaves(
+            clusterId,
+            safeArticleCount,
+            0,
+          );
+          leaves = rawLeaves as unknown as GeoJSON.Feature<GeoJSON.Point, P>[];
+        } catch {
+          leaves = [];
+        }
       }
 
-      const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
+      if (onClusterClick) {
+        onClusterClick(clusterId, coordinates, safeArticleCount, leaves);
+      }
+
       const zoom = await source.getClusterExpansionZoom(clusterId);
       map.easeTo({
         center: coordinates,
