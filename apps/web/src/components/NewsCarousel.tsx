@@ -79,6 +79,10 @@ function useClusterArticles(
           hours: hours.toString(),
         });
 
+        if (feature.state) {
+          params.set("state", feature.state);
+        }
+
         const response = await fetch(
           `${API_BASE}/api/v1/news/cluster-articles?${params}`,
         );
@@ -258,7 +262,8 @@ export function NewsCarousel({
             />
             {feature.isCluster ? (
               <span className="text-sm font-semibold text-white">
-                {isLoading ? feature.count : items.length} articles in this area
+                {isLoading ? feature.count : items.length} articles in{" "}
+                {feature.state ?? "this area"}
               </span>
             ) : (
               <span className="text-xs font-medium text-slate-300">

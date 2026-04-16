@@ -304,10 +304,11 @@ export class NewsRepository {
             SELECT
               n.id AS news_item_id,
               n.category,
-              l_primary.geom
+              l_primary.geom,
+              NULLIF(BTRIM(l_primary.state), '') AS state
             FROM ${newsItems} n
             JOIN LATERAL (
-              SELECT l.geom
+              SELECT l.geom, l.state
               FROM ${newsItemLocations} l
               WHERE l.news_item_id = n.id
                 AND l.geom IS NOT NULL
@@ -323,9 +324,12 @@ export class NewsRepository {
             ST_Y(ST_Centroid(ST_Collect(ap.geom::geometry)))::double precision AS latitude,
             ST_X(ST_Centroid(ST_Collect(ap.geom::geometry)))::double precision AS longitude,
             COUNT(*)::int AS count,
+            MIN(ap.state) AS state,
             json_agg(DISTINCT ap.category) AS categories_json
           FROM article_points ap
-          GROUP BY ST_SnapToGrid(ap.geom::geometry, ${gridSize}::double precision)
+          GROUP BY
+            COALESCE(LOWER(ap.state), '__unknown__'),
+            ST_SnapToGrid(ap.geom::geometry, ${gridSize}::double precision)
           ORDER BY count DESC
           LIMIT 500
         `);
@@ -333,13 +337,21 @@ export class NewsRepository {
         for (const row of result.rows) {
           const rawCategories = row.categories_json as string[] | null;
           const validCategories = (rawCategories ?? []).filter(isNewsCategory);
+          const clusterState =
+            typeof row.state === "string" && row.state.trim().length > 0
+              ? row.state.trim()
+              : null;
+          const stateKey = clusterState
+            ? clusterState.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+            : "unknown";
 
           features.push({
-            id: `cluster-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
+            id: `cluster-${stateKey}-${Number(row.latitude).toFixed(4)}-${Number(row.longitude).toFixed(4)}`,
             latitude: row.latitude as number,
             longitude: row.longitude as number,
             count: row.count as number,
             topCategories: validCategories.slice(0, 3),
+            state: clusterState,
             isCluster: true,
           } satisfies MapCluster);
         }
@@ -458,7 +470,16 @@ export class NewsRepository {
     radiusMeters: number,
     limit: number,
     hours: number,
+    state?: string,
   ): Promise<MapMarker[]> {
+    const normalizedState = state?.trim() || null;
+    const stateFilterSql = normalizedState
+      ? sql`AND LOWER(COALESCE(NULLIF(BTRIM(l.state), ''), '')) = LOWER(${normalizedState})`
+      : sql``;
+    const stateExistsFilterSql = normalizedState
+      ? sql`AND LOWER(COALESCE(NULLIF(BTRIM(l3.state), ''), '')) = LOWER(${normalizedState})`
+      : sql``;
+
     try {
       const result = await getDb().execute(sql`
         SELECT
@@ -483,6 +504,7 @@ export class NewsRepository {
           WHERE l.news_item_id = n.id
             AND l.geom IS NOT NULL
             AND ST_DWithin(l.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+            ${stateFilterSql}
           ORDER BY l.is_primary DESC
           LIMIT 1
         ) l_primary ON TRUE
@@ -493,6 +515,7 @@ export class NewsRepository {
             WHERE l3.news_item_id = n.id
               AND l3.geom IS NOT NULL
               AND ST_DWithin(l3.geom, ST_SetSRID(ST_MakePoint(${longitude}, ${latitude}), 4326)::geography, ${radiusMeters}::double precision)
+              ${stateExistsFilterSql}
           )
         ORDER BY n.published_at DESC
         LIMIT ${limit}::int

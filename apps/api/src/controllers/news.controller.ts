@@ -1,9 +1,14 @@
-import type { NextFunction, Request, Response } from 'express'
-import { z } from 'zod'
+import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
 
-import { logger } from '../config/logger.js'
-import { isNewsCategory, type ClusteredViewportQuery, type NewsCategory, type ViewportQuery } from '../types/news.js'
-import type { NewsService } from '../services/news.service.js'
+import { logger } from "../config/logger.js";
+import {
+  isNewsCategory,
+  type ClusteredViewportQuery,
+  type NewsCategory,
+  type ViewportQuery,
+} from "../types/news.js";
+import type { NewsService } from "../services/news.service.js";
 
 const viewportQuerySchema = z
   .object({
@@ -15,13 +20,13 @@ const viewportQuerySchema = z
     categories: z.string().optional(),
   })
   .refine((value) => value.minLng < value.maxLng, {
-    message: 'minLng must be less than maxLng',
-    path: ['minLng'],
+    message: "minLng must be less than maxLng",
+    path: ["minLng"],
   })
   .refine((value) => value.minLat < value.maxLat, {
-    message: 'minLat must be less than maxLat',
-    path: ['minLat'],
-  })
+    message: "minLat must be less than maxLat",
+    path: ["minLat"],
+  });
 
 const clusteredViewportSchema = z
   .object({
@@ -34,21 +39,23 @@ const clusteredViewportSchema = z
     categories: z.string().optional(),
   })
   .refine((value) => value.minLng < value.maxLng, {
-    message: 'minLng must be less than maxLng',
-    path: ['minLng'],
+    message: "minLng must be less than maxLng",
+    path: ["minLng"],
   })
   .refine((value) => value.minLat < value.maxLat, {
-    message: 'minLat must be less than maxLat',
-    path: ['minLat'],
-  })
+    message: "minLat must be less than maxLat",
+    path: ["minLat"],
+  });
 
-const parseCategories = (raw: string | undefined): NewsCategory[] | undefined => {
+const parseCategories = (
+  raw: string | undefined,
+): NewsCategory[] | undefined => {
   const categories = raw
-    ?.split(',')
+    ?.split(",")
     .map((value) => value.trim())
-    .filter(isNewsCategory)
-  return categories && categories.length > 0 ? categories : undefined
-}
+    .filter(isNewsCategory);
+  return categories && categories.length > 0 ? categories : undefined;
+};
 
 const clusterArticlesSchema = z.object({
   longitude: z.coerce.number().min(-180).max(180),
@@ -56,7 +63,8 @@ const clusterArticlesSchema = z.object({
   radius: z.coerce.number().min(100).max(500000).default(5000),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   hours: z.coerce.number().int().min(1).max(72).default(24),
-})
+  state: z.string().trim().min(1).max(120).optional(),
+});
 
 export class NewsController {
   constructor(private readonly service: NewsService) {}
@@ -66,17 +74,17 @@ export class NewsController {
     res: Response,
     next: NextFunction,
   ): Promise<void> => {
-    const parsed = viewportQuerySchema.safeParse(req.query)
+    const parsed = viewportQuerySchema.safeParse(req.query);
 
     if (!parsed.success) {
       res.status(400).json({
-        error: 'Invalid viewport query',
+        error: "Invalid viewport query",
         details: parsed.error.flatten(),
-      })
-      return
+      });
+      return;
     }
 
-    const categories = parseCategories(parsed.data.categories)
+    const categories = parseCategories(parsed.data.categories);
 
     const viewport: ViewportQuery = {
       minLng: parsed.data.minLng,
@@ -85,10 +93,10 @@ export class NewsController {
       maxLat: parsed.data.maxLat,
       hours: parsed.data.hours,
       categories,
-    }
+    };
 
     try {
-      const data = await this.service.getViewportNews(viewport)
+      const data = await this.service.getViewportNews(viewport);
 
       res.json({
         data,
@@ -96,29 +104,29 @@ export class NewsController {
           count: data.length,
           query: viewport,
         },
-      })
+      });
     } catch (error) {
-      logger.error({ error }, 'Failed to fetch viewport news')
-      next(error)
+      logger.error({ error }, "Failed to fetch viewport news");
+      next(error);
     }
-  }
+  };
 
   getClusteredViewport = async (
     req: Request,
     res: Response,
     next: NextFunction,
   ): Promise<void> => {
-    const parsed = clusteredViewportSchema.safeParse(req.query)
+    const parsed = clusteredViewportSchema.safeParse(req.query);
 
     if (!parsed.success) {
       res.status(400).json({
-        error: 'Invalid clustered viewport query',
+        error: "Invalid clustered viewport query",
         details: parsed.error.flatten(),
-      })
-      return
+      });
+      return;
     }
 
-    const categories = parseCategories(parsed.data.categories)
+    const categories = parseCategories(parsed.data.categories);
 
     const query: ClusteredViewportQuery = {
       minLng: parsed.data.minLng,
@@ -128,36 +136,36 @@ export class NewsController {
       zoom: parsed.data.zoom,
       hours: parsed.data.hours,
       categories,
-    }
+    };
 
     try {
-      const data = await this.service.getClusteredViewport(query)
-      res.json(data)
+      const data = await this.service.getClusteredViewport(query);
+      res.json(data);
     } catch (error) {
-      logger.error({ error }, 'Failed to fetch clustered viewport')
-      next(error)
+      logger.error({ error }, "Failed to fetch clustered viewport");
+      next(error);
     }
-  }
+  };
 
   getRealtimeStats = (_req: Request, res: Response): void => {
     res.json({
       data: this.service.getRealtimeStats(),
-    })
-  }
+    });
+  };
 
   getClusterArticles = async (
     req: Request,
     res: Response,
     next: NextFunction,
   ): Promise<void> => {
-    const parsed = clusterArticlesSchema.safeParse(req.query)
+    const parsed = clusterArticlesSchema.safeParse(req.query);
 
     if (!parsed.success) {
       res.status(400).json({
-        error: 'Invalid cluster articles query',
+        error: "Invalid cluster articles query",
         details: parsed.error.flatten(),
-      })
-      return
+      });
+      return;
     }
 
     try {
@@ -167,12 +175,13 @@ export class NewsController {
         parsed.data.radius,
         parsed.data.limit,
         parsed.data.hours,
-      )
+        parsed.data.state,
+      );
 
-      res.json({ data: articles })
+      res.json({ data: articles });
     } catch (error) {
-      logger.error({ error }, 'Failed to fetch cluster articles')
-      next(error)
+      logger.error({ error }, "Failed to fetch cluster articles");
+      next(error);
     }
-  }
+  };
 }

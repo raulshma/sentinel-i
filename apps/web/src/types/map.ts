@@ -41,6 +41,7 @@ export interface MapCluster {
   longitude: number;
   count: number;
   topCategories: NewsCategory[];
+  state: string | null;
   zoom?: number;
   clusterArticles?: MapMarker[];
   isCluster: true;

@@ -124,6 +124,7 @@ export interface MapCluster {
   longitude: number;
   count: number;
   topCategories: NewsCategory[];
+  state: string | null;
   isCluster: true;
 }
 

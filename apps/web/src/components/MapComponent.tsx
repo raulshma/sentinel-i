@@ -219,22 +219,55 @@ export function MapComponent({
 
   const currentZoomRef = useRef(mapZoom);
 
-  const geojsonData = useMemo<
-    GeoJSON.FeatureCollection<GeoJSON.Point, NewsProperties>
+  const geojsonLayers = useMemo<
+    Array<{
+      key: string;
+      state: string | null;
+      data: GeoJSON.FeatureCollection<GeoJSON.Point, NewsProperties>;
+    }>
   >(() => {
     const seenNewsItemIds = new Set<string>();
-    const deduped = features.filter((f) => {
-      if (f.latitude === 0 && f.longitude === 0) return false;
-      if (f.isCluster) return true;
-      if (!f.newsItemId) return true;
-      if (seenNewsItemIds.has(f.newsItemId)) return false;
-      seenNewsItemIds.add(f.newsItemId);
-      return true;
-    });
+    const grouped = new Map<
+      string,
+      {
+        key: string;
+        state: string | null;
+        data: GeoJSON.FeatureCollection<GeoJSON.Point, NewsProperties>;
+      }
+    >();
 
-    return {
-      type: "FeatureCollection",
-      features: deduped.map((f) => ({
+    for (const f of features) {
+      if (f.latitude === 0 && f.longitude === 0) continue;
+
+      if (!f.isCluster) {
+        if (!f.newsItemId) continue;
+        if (seenNewsItemIds.has(f.newsItemId)) continue;
+        seenNewsItemIds.add(f.newsItemId);
+      }
+
+      const normalizedState = typeof f.state === "string" ? f.state.trim() : "";
+      const state = normalizedState.length > 0 ? normalizedState : null;
+      const bucketKey = state
+        ? `state:${state.toLowerCase()}`
+        : f.isCluster
+          ? `cluster:${f.id}`
+          : `marker:${f.newsItemId}`;
+
+      if (!grouped.has(bucketKey)) {
+        grouped.set(bucketKey, {
+          key: bucketKey,
+          state,
+          data: {
+            type: "FeatureCollection",
+            features: [],
+          },
+        });
+      }
+
+      const bucket = grouped.get(bucketKey);
+      if (!bucket) continue;
+
+      bucket.data.features.push({
         type: "Feature" as const,
         geometry: {
           type: "Point" as const,
@@ -256,13 +289,15 @@ export function MapComponent({
           newsItemId: f.isCluster ? "" : f.newsItemId,
           cities: f.isCluster ? [] : f.cities,
           city: f.isCluster ? null : f.city,
-          state: f.isCluster ? null : f.state,
+          state: f.state ?? null,
           summary: f.isCluster ? "" : f.summary,
           sourceUrl: f.isCluster ? "" : f.sourceUrl,
           publishedAt: f.isCluster ? "" : f.publishedAt,
         },
-      })),
-    };
+      });
+    }
+
+    return [...grouped.values()];
   }, [features]);
 
   const articleGroups = useMemo(() => {
@@ -319,6 +354,7 @@ export function MapComponent({
               p.topCategories.length > 0
                 ? p.topCategories
                 : [p.category as NewsCategory],
+            state: p.state,
             zoom: p.zoom ?? currentZoomRef.current,
             isCluster: true,
           }
@@ -351,6 +387,7 @@ export function MapComponent({
       coordinates: [number, number],
       pointCount: number,
       leaves: GeoJSON.Feature<GeoJSON.Point, NewsProperties>[],
+      state: string | null,
     ) => {
       const uniqueArticles = new Map<string, MapMarker>();
       const categoryCounts = new Map<NewsCategory, number>();
@@ -367,6 +404,10 @@ export function MapComponent({
       }
 
       const clusterArticles = [...uniqueArticles.values()];
+      const resolvedState =
+        state ??
+        clusterArticles.find((article) => article.state)?.state ??
+        null;
       const topCategories =
         categoryCounts.size > 0
           ? ([...categoryCounts.entries()]
@@ -381,6 +422,7 @@ export function MapComponent({
         longitude: coordinates[0],
         count: pointCount,
         topCategories,
+        state: resolvedState,
         zoom: currentZoomRef.current,
         clusterArticles:
           clusterArticles.length > 0 ? clusterArticles : undefined,
@@ -428,16 +470,27 @@ export function MapComponent({
           );
         })}
 
-        <MapClusterLayer<NewsProperties>
-          data={geojsonData}
-          clusterRadius={50}
-          clusterMaxZoom={14}
-          clusterColors={CLUSTER_COLORS}
-          clusterThresholds={CLUSTER_THRESHOLDS}
-          pointColor="#3b82f6"
-          onPointClick={handlePointClick}
-          onClusterClick={handleClusterClick}
-        />
+        {geojsonLayers.map((layer) => (
+          <MapClusterLayer<NewsProperties>
+            key={layer.key}
+            data={layer.data}
+            clusterRadius={50}
+            clusterMaxZoom={14}
+            clusterColors={CLUSTER_COLORS}
+            clusterThresholds={CLUSTER_THRESHOLDS}
+            pointColor="#3b82f6"
+            onPointClick={handlePointClick}
+            onClusterClick={(clusterId, coordinates, pointCount, leaves) =>
+              handleClusterClick(
+                clusterId,
+                coordinates,
+                pointCount,
+                leaves,
+                layer.state,
+              )
+            }
+          />
+        ))}
 
         <LiveUpdatePulseLayer pulse={liveUpdatePulse ?? null} />
 
