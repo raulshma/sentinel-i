@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit'
 
 import { env } from './config/env.js'
 import { logger } from './config/logger.js'
+import { geocodeRouter } from './routes/geocode.routes.js'
 import { newsRouter } from './routes/news.routes.js'
 import { processingRouter } from './routes/processing.routes.js'
 import { systemRouter } from './routes/system.routes.js'
@@ -34,6 +35,7 @@ export const createApp = () => {
   app.use('/api/v1', systemRouter)
   app.use('/api/v1/news', newsRouter)
   app.use('/api/v1/processing', processingRouter)
+  app.use('/api/v1/geocode', geocodeRouter)
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Route not found' })

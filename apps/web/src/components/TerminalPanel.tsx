@@ -12,6 +12,7 @@ import {
   Minimize2,
   RefreshCw,
   Search,
+  MapPin,
 } from "lucide-react";
 import type {
   ProcessingLogEntry,
@@ -26,6 +27,8 @@ import {
 } from "../hooks/useProcessingTimeline";
 
 type TerminalTab = "stream" | "timeline" | "analytics";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 const STAGE_LABELS: Record<ProcessingStage, string> = {
   queue: "QUEUE",
@@ -237,6 +240,7 @@ export function TerminalPanel({
   const [timelineHours, setTimelineHours] = useState(24);
   const [timelineSearch, setTimelineSearch] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [isGeocodeBackfilling, setIsGeocodeBackfilling] = useState(false);
 
   const {
     data: timelineData,
@@ -357,6 +361,26 @@ export function TerminalPanel({
 
   const handleToggleMaximize = useCallback(() => {
     setIsMaximized((prev) => !prev);
+  }, []);
+
+  const handleGeocodeBackfill = useCallback(async () => {
+    setIsGeocodeBackfilling(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/geocode/backfill`, {
+        method: "POST",
+      });
+      const data = (await res.json()) as {
+        totalLocations: number;
+        message: string;
+      };
+      if (data.totalLocations === 0) {
+        setIsGeocodeBackfilling(false);
+      } else {
+        setTimeout(() => setIsGeocodeBackfilling(false), 120_000);
+      }
+    } catch {
+      setIsGeocodeBackfilling(false);
+    }
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -913,6 +937,21 @@ export function TerminalPanel({
             aria-hidden="true"
           />
           {isSyncing ? "Syncing..." : "Sync"}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleGeocodeBackfill}
+          disabled={isGeocodeBackfilling}
+          aria-label="Geocode backfill for locations without coordinates"
+          className="flex items-center gap-1 rounded-md bg-amber-500/20 px-2 py-1 text-[10px] font-medium text-amber-300 transition-all duration-150 hover:bg-amber-500/30 hover:scale-[1.04] active:scale-[0.97] disabled:opacity-40"
+        >
+          <MapPin
+            size={9}
+            className={isGeocodeBackfilling ? "animate-pulse" : ""}
+            aria-hidden="true"
+          />
+          {isGeocodeBackfilling ? "Backfilling..." : "Geocode"}
         </button>
       </div>
 
