@@ -24,6 +24,16 @@ interface NewsCarouselProps {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
+function getClusterRadiusMeters(zoom: number): number {
+  let gridSizeDegrees: number
+  if (zoom <= 4) gridSizeDegrees = 3.0
+  else if (zoom <= 6) gridSizeDegrees = 1.5
+  else if (zoom <= 8) gridSizeDegrees = 0.8
+  else if (zoom <= 10) gridSizeDegrees = 0.3
+  else gridSizeDegrees = 0.1
+  return Math.round(gridSizeDegrees * 111000 * 0.6)
+}
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleString('en-IN', {
     dateStyle: 'medium',
@@ -49,7 +59,7 @@ function useClusterArticles(feature: MapFeature | null, hours: number) {
       setIsLoading(true)
       try {
         const zoom = feature.zoom ?? 4
-        const radiusMeters = Math.min(500000, Math.max(5000, Math.round(400000 / Math.pow(2, zoom - 4))))
+        const radiusMeters = getClusterRadiusMeters(zoom)
 
         const params = new URLSearchParams({
           longitude: feature.longitude.toString(),
@@ -215,7 +225,7 @@ export function NewsCarousel({
             />
             {feature.isCluster ? (
               <span className="text-sm font-semibold text-white">
-                {feature.count} articles in this area
+                {isLoading ? feature.count : items.length} articles in this area
               </span>
             ) : (
               <span className="text-xs font-medium text-slate-300">

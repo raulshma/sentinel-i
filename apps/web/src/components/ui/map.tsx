@@ -1268,6 +1268,9 @@ function MapClusterLayer<
       cluster: true,
       clusterMaxZoom,
       clusterRadius,
+      clusterProperties: {
+        articleCount: ["+", ["coalesce", ["get", "count"], 1]],
+      },
     });
 
     map.addLayer({
@@ -1278,7 +1281,7 @@ function MapClusterLayer<
       paint: {
         "circle-color": [
           "step",
-          ["get", "point_count"],
+          ["get", "articleCount"],
           clusterColors[0],
           clusterThresholds[0],
           clusterColors[1],
@@ -1287,7 +1290,7 @@ function MapClusterLayer<
         ],
         "circle-radius": [
           "step",
-          ["get", "point_count"],
+          ["get", "articleCount"],
           20,
           clusterThresholds[0],
           30,
@@ -1306,7 +1309,7 @@ function MapClusterLayer<
       source: sourceId,
       filter: ["has", "point_count"],
       layout: {
-        "text-field": "{point_count_abbreviated}",
+        "text-field": ["to-string", ["get", "articleCount"]],
         "text-font": ["Open Sans Regular", "Noto Sans Regular"],
         "text-size": 12,
       },
@@ -1361,7 +1364,7 @@ function MapClusterLayer<
     if (map.getLayer(clusterLayerId) && colorsChanged) {
       map.setPaintProperty(clusterLayerId, "circle-color", [
         "step",
-        ["get", "point_count"],
+        ["get", "articleCount"],
         clusterColors[0],
         clusterThresholds[0],
         clusterColors[1],
@@ -1370,7 +1373,7 @@ function MapClusterLayer<
       ]);
       map.setPaintProperty(clusterLayerId, "circle-radius", [
         "step",
-        ["get", "point_count"],
+        ["get", "articleCount"],
         20,
         clusterThresholds[0],
         30,
@@ -1415,14 +1418,14 @@ function MapClusterLayer<
 
       const feature = features[0];
       const clusterId = feature.properties?.cluster_id as number;
-      const pointCount = feature.properties?.point_count as number;
+      const articleCount = feature.properties?.articleCount as number;
       const coordinates = (feature.geometry as GeoJSON.Point).coordinates as [
         number,
         number,
       ];
 
       if (onClusterClick) {
-        onClusterClick(clusterId, coordinates, pointCount);
+        onClusterClick(clusterId, coordinates, articleCount);
       }
 
       const source = map.getSource(sourceId) as MapLibreGL.GeoJSONSource;
